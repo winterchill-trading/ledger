@@ -33,6 +33,8 @@ let place
 let open_hold balances hold_id ~amount =
   match Balances.find_hold balances hold_id with
   | None -> Or_error.error_s [%message "unknown hold" (hold_id : Hold_id.t)]
+  | Some h when Money.Amount.is_zero h.remaining ->
+    Or_error.error_s [%message "hold is already closed" (hold_id : Hold_id.t)]
   | Some h -> Ok (h, Option.value amount ~default:h.remaining)
 ;;
 

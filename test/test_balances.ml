@@ -208,7 +208,7 @@ let%expect_test "card authorisation: hold, partial capture, release" =
      (posted "65.00 EUR"))
     (((id auth-1) (account customer:alice) (placed "40.00 EUR")
       (remaining "0.00 EUR") (placed_seq 8)))
-    ("hold is already closed" (id auth-1))
+    ("hold is already closed" (hold_id auth-1))
     |}]
 ;;
 
