@@ -48,6 +48,7 @@ module Op = struct
         { hold : int
         ; units : int
         }
+    | Close_day (** only in the journal property; refused for [Balances] alone *)
   [@@deriving sexp_of, quickcheck]
 end
 
@@ -147,6 +148,7 @@ let build b ~i (op : Op.t) =
       ~effective_at:at
       ~recorded_at:at
       ()
+  | Close_day -> Or_error.error_string "close is a journal operation"
   | Reverse { back } ->
     Reversal.create
       b
@@ -234,21 +236,37 @@ let%test_unit "a journal file replays and reopens to the same state" =
       ignore (Journal.open_account j a |> ok_exn : Journal.Append_result.t));
     (* Refused entries are remembered as Rejected records, which replay must also
        reproduce. *)
-    List.iteri ops ~f:(fun i op ->
-      match build (Journal.balances j) ~i op with
-      | Error _ -> ()
-      | Ok entry ->
-        ignore (Journal.append_entry j entry : Journal.Append_result.t Or_error.t));
+    (* Each close moves the business date on (the next day after the last close), so later
+       entries land on a new day. *)
+    let snapshots =
+      List.filter_mapi ops ~f:(fun i op ->
+        match op with
+        | Close_day ->
+          Some (Journal.close_day ~snapshot_path:(sprintf "%s.%d.snap" path i) j |> ok_exn)
+        | _ ->
+          (match build (Journal.balances j) ~i op with
+           | Error _ -> ()
+           | Ok entry ->
+             ignore (Journal.append_entry j entry : Journal.Append_result.t Or_error.t));
+          None)
+    in
     let live = Journal.balances j in
     let records = Journal.records j in
     Journal.close j;
+    List.iter snapshots ~f:(fun s -> Snapshot.verify s ~journal:path |> ok_exn);
+    Option.iter (List.last snapshots) ~f:(fun s ->
+      let from_snapshot = Journal.open_ ~fsync:false ~snapshot:s path |> ok_exn in
+      assert (Balances.equal (Journal.balances from_snapshot) live);
+      Journal.close from_snapshot);
     check_invariants live;
     [%test_result: Record.t list] (Journal.read path |> ok_exn |> fst) ~expect:records;
     assert (Balances.equal (Journal.replay path |> ok_exn) live);
     let reopened = Journal.open_ ~fsync:false path |> ok_exn in
     assert (Balances.equal (Journal.balances reopened) live);
     Journal.close reopened;
-    Core_unix.unlink path);
+    ignore
+      (Core_unix.system (sprintf "rm -rf %s*" (Filename.quote path))
+       : Core_unix.Exit_or_signal.t));
   Core_unix.rmdir dir
 ;;
 
