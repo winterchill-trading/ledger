@@ -68,12 +68,11 @@ let records =
     ~kind:(Transfer "fee")
     ~reference:"monthly-fee"
     [ Posting.debit alice (eur "2.50"); Posting.credit fees (eur "2.50") ];
-  let fee_seq = Balances.next_seq !b - 1 in
   add
     (Posted
        (Reversal.create
           !b
-          ~seq:fee_seq
+          ~reverses:(key "fee-1")
           ~idempotency_key:(key "fee-1-waived")
           ~effective_at:(at 2100)
           ~recorded_at:(at 2100)
@@ -108,7 +107,7 @@ let%expect_test "statement" =
         9  2026-10-01 11:00:00  hold auth-77       card-coffee             42.10                        607.90
        11  2026-10-02 10:00:00  release auth-77    card-coffee                             2.20         610.10
        12  2026-10-02 18:20:00  fee                monthly-fee              2.50                        607.60
-       13  2026-10-02 20:00:00  reversal of #12    monthly-fee                             2.50         610.10
+       13  2026-10-02 20:00:00  reversal of fee-1  monthly-fee                             2.50         610.10
                                 closing balance                                                         610.10
     |}]
 ;;

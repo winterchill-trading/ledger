@@ -31,7 +31,7 @@ let find_kind records account =
   List.find_map records ~f:(fun (r : Record.t) ->
     match r.event with
     | Account_opened a when Account_id.equal a.id owner -> Some a.kind
-    | Account_opened _ | Posted _ -> None)
+    | _ -> None)
 ;;
 
 let create ?from ?until ?(after_seq = 0) ?limit records ~account ~currency =
@@ -54,9 +54,7 @@ let create ?from ?until ?(after_seq = 0) ?limit records ~account ~currency =
     let more = ref false in
     let last_seq = ref after_seq in
     List.iter records ~f:(fun (r : Record.t) ->
-      match r.event with
-      | Account_opened _ -> ()
-      | Posted entry ->
+      List.iter (Record.entries r) ~f:(fun entry ->
         let mine =
           List.filter entry.postings ~f:(fun (p : Posting.t) ->
             Account_id.equal p.account account
@@ -89,7 +87,7 @@ let create ?from ?until ?(after_seq = 0) ?limit records ~account ~currency =
                  ; amount = p.amount
                  ; balance = !balance
                  }
-                 :: !lines)));
+                 :: !lines))));
     let lines = List.rev !lines in
     let closing =
       match List.last lines with
@@ -111,7 +109,11 @@ let kind_to_string : Entry.Kind.t -> string = function
   | Hold_place id -> "hold " ^ Hold_id.to_string id
   | Hold_release id -> "release " ^ Hold_id.to_string id
   | Hold_capture id -> "capture " ^ Hold_id.to_string id
-  | Reversal { reverses } -> sprintf "reversal of #%d" reverses
+  | Reversal { reverses } -> "reversal of " ^ Idempotency_key.to_string reverses
+  | Hold_place_expiring { hold; _ } -> "hold " ^ Hold_id.to_string hold
+  | Hold_expire id -> "expiry " ^ Hold_id.to_string id
+  | Hold_increment id -> "hold+ " ^ Hold_id.to_string id
+  | Hold_over_capture { hold; _ } -> "capture+ " ^ Hold_id.to_string hold
 ;;
 
 let to_string_hum t =
