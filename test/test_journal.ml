@@ -54,8 +54,8 @@ let%expect_test "the record digest is pinned" =
   assert (List.mem Record.compatible_digests Record.digest ~equal:String.equal);
   [%expect
     {|
-    3d66d278d2cb87148044dbc25f542224
-    (3d66d278d2cb87148044dbc25f542224)
+    132f0e078ccf2b8aa2dafa81b3ab9d9b
+    (132f0e078ccf2b8aa2dafa81b3ab9d9b)
     |}]
 ;;
 
@@ -104,9 +104,10 @@ let%expect_test "create, append, reopen, replay" =
     ((seq 8)
      (event
       (Posted
-       ((idempotency_key h1) (kind (Hold_place auth-1)) (reference "")
-        (effective_at "2026-10-01 09:01:00Z")
-        (recorded_at "2026-10-01 09:00:00Z")
+       ((idempotency_key h1) (kind (Hold_place auth-1)) (code Hold)
+        (reference "") (remittance_info "") (effective_at "2026-10-01 09:01:00Z")
+        (recorded_at "2026-10-01 09:00:00.000000001Z") (business_date 2026-10-01)
+        (sca ())
         (postings
          (((account customer:alice) (side Debit) (amount "25.00 EUR"))
           ((account customer:alice/pending) (side Credit) (amount "25.00 EUR"))))))))
@@ -154,7 +155,7 @@ let%expect_test "retries are duplicates, reused keys are errors" =
     (Ok (Duplicate (seq 7)))
     (Error
      ("idempotency key already used for a different entry"
-      (idempotency_key dep-1) (booked_at 7)))
+      (idempotency_keys (dep-1)) (booked_at 7)))
     (Ok (Duplicate (seq 1)))
     (Error ("account already open" bank:central))
     (Ok 9)
@@ -193,8 +194,8 @@ let%expect_test "a crash mid-append is repaired only on request" =
     {|
     ((Journal.open_ $DIR/j.bin)
      ("journal ends in a partial record (a crash during an append); reopen with repair_truncated_tail to cut it off"
-      (tail (Truncated (offset 501) (bytes 113)))))
-    (Ok (Truncated (offset 501) (bytes 113)))
+      (tail (Truncated (offset 739) (bytes 153)))))
+    (Ok (Truncated (offset 739) (bytes 153)))
     8
     (Ok 8)
     true
@@ -221,10 +222,10 @@ let%expect_test "corruption is detected on reopen" =
     {|
     ((Journal.open_ $DIR/j.bin)
      ("corrupt journal"
-      (tail (Corrupt (offset 309) (reason "damaged length header")))))
+      (tail (Corrupt (offset 374) (reason "checksum mismatch")))))
     ((Journal.replay $DIR/j.bin)
      ("corrupt journal"
-      (tail (Corrupt (offset 309) (reason "damaged length header")))))
+      (tail (Corrupt (offset 374) (reason "checksum mismatch")))))
     ((Journal.open_ $DIR/j.bin)
      ("not a ledger journal (missing or short header)" (total 5)))
     |}]
@@ -240,7 +241,7 @@ let%expect_test "a journal from another record type is refused" =
     ((Journal.open_ $DIR/j.bin)
      ("journal written with a record type this reader does not know"
       (digest 00000000000000000000000000000000)
-      (accept (3d66d278d2cb87148044dbc25f542224))))
+      (accept (132f0e078ccf2b8aa2dafa81b3ab9d9b))))
     |}]
 ;;
 

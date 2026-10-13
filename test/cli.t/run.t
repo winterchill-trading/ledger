@@ -34,13 +34,14 @@ demo never overwrites an existing journal.
 
 A damaged journal is reported, and reading stops at the damage.
 
-  $ head -c 400 j.bin > cut.bin
+  $ head -c 1000 j.bin > cut.bin
   $ ledger trial-balance -journal cut.bin
   ("warning: journal does not end cleanly"
-   (tail (Truncated (offset 373) (bytes 27))))
+   (tail (Truncated (offset 900) (bytes 100))))
   ACCOUNT         CURRENCY                DEBIT               CREDIT
   bank:central    EUR                    250.00
-  customer:alice  EUR                                         250.00
+  customer:alice  EUR                                         231.60
+  external:cards  EUR                                          18.40
   TOTAL           EUR                    250.00               250.00
   $ ledger statement -journal j.bin -account customer:nobody
   ("account not opened" (account customer:nobody))
