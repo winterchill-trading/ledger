@@ -1,0 +1,14 @@
+(library
+ (name ledger_test)
+ (package ledger)
+ (libraries
+  core
+  core_unix
+  core_unix.filename_unix
+  expect_test_helpers_core
+  ledger)
+ (inline_tests
+  (flags
+   (:standard -source-tree-root .)))
+ (preprocess
+  (pps ppx_jane)))
