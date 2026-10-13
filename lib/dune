@@ -1,6 +1,6 @@
 (library
  (name ledger)
  (public_name ledger)
- (libraries core core_unix async_kernel money)
+ (libraries core core_unix async_kernel cryptokit money)
  (preprocess
   (pps ppx_jane)))

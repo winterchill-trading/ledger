@@ -23,6 +23,7 @@
   core
   core_unix
   async_kernel
+  cryptokit
   money
   ppx_jane
   (expect_test_helpers_core :with-test)))
