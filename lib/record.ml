@@ -26,4 +26,12 @@ type t = Stable.V1.t =
 [@@deriving sexp_of, compare, equal]
 
 let digest = Bin_prot.Shape.eval_to_digest_string Stable.V1.bin_shape_t
-let compatible_digests = [ digest ]
+
+(* Literal, not [digest]: when a type inside a record changes, the computed digest moves
+   and the pinned test in test_journal.ml fails until the change is classified (see the
+   .mli). *)
+let compatible_digests =
+  [ (* V1, 2026-10-13: accounts, entries with holds and reversals. *)
+    "3d66d278d2cb87148044dbc25f542224"
+  ]
+;;
