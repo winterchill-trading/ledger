@@ -81,6 +81,7 @@ let to_string_hum t =
   let cell a = if Amount.is_zero a then "" else Amount.to_decimal_string a in
   let line name currency debit credit =
     sprintf "%-*s  %-8s %20s %20s" account_width name currency debit credit
+    |> String.rstrip
   in
   let header = line "ACCOUNT" "CURRENCY" "DEBIT" "CREDIT" in
   let rows =
