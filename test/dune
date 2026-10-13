@@ -12,3 +12,7 @@
    (:standard -source-tree-root .)))
  (preprocess
   (pps ppx_jane)))
+
+(cram
+ (package ledger)
+ (deps %{bin:ledger}))
