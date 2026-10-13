@@ -25,6 +25,23 @@ Write the example journal, then read it back.
                               closing balance                                                         231.60
   more: -after 6
 
+The same month as camt.053, with the open card authorisation as pending.
+
+  $ ledger camt053 -journal j.bin -account customer:alice -from 2026-10-01 -to 2026-10-31 -pending
+  camt.053 customer:alice/EUR/2026-10-01 customer:alice EUR 2026-10-01..2026-10-31
+    OPBD 2026-10-01 CRDT 0.00 EUR
+    CLBD 2026-10-31 CRDT 230.10 EUR
+    CLAV 2026-10-31 CRDT 230.10 EUR
+    5.0      BOOK 2026-10-01 2026-10-01 CRDT       250.00 EUR DEPOSIT           sepa-in-001
+    7.0      BOOK 2026-10-01 2026-10-03 DBIT        18.40 EUR CARD_SETTLEMENT   card-bakery
+    8.0      BOOK 2026-10-01 2026-10-31 DBIT         1.50 EUR FEE               monthly-fee
+
+verify checks frames, the hash chain and the ledger rules, and prints the head hash.
+
+  $ ledger verify -journal j.bin
+  ((records 8) (tail Clean)
+   (head cc42d0eb7b8493b1ccbaacae881a0a0b75c17daa84d4e51476d68d78bb89d966))
+
 demo never overwrites an existing journal.
 
   $ ledger demo -journal j.bin
@@ -43,6 +60,10 @@ A damaged journal is reported, and reading stops at the damage.
   customer:alice  EUR                                         231.60
   external:cards  EUR                                          18.40
   TOTAL           EUR                    250.00               250.00
+  $ ledger verify -journal cut.bin
+  ((records 7) (tail (Truncated (offset 900) (bytes 100)))
+   (head f12a6d70772309e840fe55e6b9560912713fb00450715de06dedca6484b6a2da))
+  [2]
   $ ledger statement -journal j.bin -account customer:nobody
   ("account not opened" (account customer:nobody))
   [1]
