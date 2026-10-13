@@ -9,16 +9,34 @@
 
 open! Core
 
+(** What the account is for, so safeguarding and clearing reports can find them. Ids, not
+    people: the ledger stores no personal data, so customer accounts are named by an
+    opaque customer id and tags hold ids too. *)
+module Purpose : sig
+  type t =
+    | General
+    | Customer_funds (** what the institution owes a customer; a Liability *)
+    | Safeguarding_asset
+    (** money held at a bank or provider to cover customer funds; an Asset *)
+    | Own_funds
+    | Fee_income
+    | Clearing
+    (** a transit account for one flow (SEPA out, cards, FX) that must return to zero *)
+  [@@deriving sexp, compare, equal, enumerate]
+end
+
 type t =
   { id : Account_id.t
   ; kind : Account_kind.t
+  ; purpose : Purpose.t
   ; allow_negative : bool
   ; tags : string String.Map.t (** free labels, e.g. [customer], [product] *)
   }
 [@@deriving sexp, compare, equal, fields ~getters]
 
 val create
-  :  ?allow_negative:bool (** default [false] *)
+  :  ?purpose:Purpose.t (** default [General] *)
+  -> ?allow_negative:bool (** default [false] *)
   -> ?tags:(string * string) list
   -> Account_id.t
   -> Account_kind.t
