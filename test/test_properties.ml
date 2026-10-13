@@ -40,6 +40,14 @@ module Op = struct
         ; units : int option
         }
     | Reverse of { back : int }
+    | Increment of
+        { hold : int
+        ; units : int
+        }
+    | Over_capture of
+        { hold : int
+        ; units : int
+        }
   [@@deriving sexp_of, quickcheck]
 end
 
@@ -111,10 +119,38 @@ let build b ~i (op : Op.t) =
       ~effective_at:at
       ~recorded_at:at
       ()
+  | Increment { hold; units } ->
+    let%bind.Or_error h =
+      Balances.find_hold b (hold_id hold)
+      |> Or_error.of_option ~error:(Error.of_string "no hold")
+    in
+    Hold.increment
+      b
+      ~hold_id:(hold_id hold)
+      ~amount:(amount (Amount.currency h.placed) units)
+      ~idempotency_key:k
+      ~effective_at:at
+      ~recorded_at:at
+      ()
+  | Over_capture { hold; units } ->
+    let%bind.Or_error h =
+      Balances.find_hold b (hold_id hold)
+      |> Or_error.of_option ~error:(Error.of_string "no hold")
+    in
+    Hold.over_capture
+      b
+      ~hold_id:(hold_id hold)
+      ~amount:(Amount.add_exn h.remaining (amount (Amount.currency h.placed) units))
+      ~reason:"tip"
+      ~to_:card_scheme
+      ~idempotency_key:k
+      ~effective_at:at
+      ~recorded_at:at
+      ()
   | Reverse { back } ->
     Reversal.create
       b
-      ~seq:(Int.max 1 (Balances.next_seq b - 1 - (Int.abs back % 8)))
+      ~reverses:(key (sprintf "op-%d" (Int.max 0 (i - 1 - (back % 8)))))
       ~idempotency_key:k
       ~effective_at:at
       ~recorded_at:at
@@ -156,7 +192,19 @@ let check_invariants b =
         |> Amount.sum currency
         |> ok_exn
       in
-      [%test_result: Amount.t] (Balances.held b account.id currency) ~expect:open_holds))
+      [%test_result: Amount.t] (Balances.held b account.id currency) ~expect:open_holds;
+      (* The TigerBeetle-style columns agree with the balances. *)
+      let c = Balances.columns b account.id currency in
+      let booked, pending =
+        match Account_kind.normal_side account.kind with
+        | Credit -> Amount.sub_exn c.credits_posted c.debits_posted, c.debits_pending
+        | Debit -> Amount.sub_exn c.debits_posted c.credits_posted, c.credits_pending
+      in
+      [%test_result: Amount.t] booked ~expect:(Balances.posted b account.id currency);
+      [%test_result: Amount.t] pending ~expect:(Balances.held b account.id currency);
+      List.iter
+        [ c.debits_posted; c.credits_posted; c.debits_pending; c.credits_pending ]
+        ~f:(fun a -> assert (not (Amount.is_negative a)))))
 ;;
 
 let%test_unit "every accepted sequence keeps the books balanced and nobody overdrawn" =
@@ -176,23 +224,30 @@ let%test_unit "replaying the records reproduces the balances" =
       ~expect:(summary b))
 ;;
 
-let%test_unit "a journal file replays to the same balances" =
+let%test_unit "a journal file replays and reopens to the same state" =
   let dir = Filename_unix.temp_dir "ledger" "prop" in
   Quickcheck.test gen_ops ~trials:40 ~sexp_of:[%sexp_of: Op.t list] ~f:(fun ops ->
-    let b, records, _ = run ops in
     let path = Filename_unix.temp_file ~in_dir:dir "j" ".bin" in
     Core_unix.unlink path;
     let j = Journal.create ~fsync:false path |> ok_exn in
-    List.iter records ~f:(fun (r : Record.t) ->
-      match r.event with
-      | Account_opened a ->
-        ignore (Journal.open_account j a |> ok_exn : Journal.Append_result.t)
-      | Posted e -> ignore (Journal.append_entry j e |> ok_exn : Journal.Append_result.t));
+    List.iter chart ~f:(fun a ->
+      ignore (Journal.open_account j a |> ok_exn : Journal.Append_result.t));
+    (* Refused entries are remembered as Rejected records, which replay must also
+       reproduce. *)
+    List.iteri ops ~f:(fun i op ->
+      match build (Journal.balances j) ~i op with
+      | Error _ -> ()
+      | Ok entry ->
+        ignore (Journal.append_entry j entry : Journal.Append_result.t Or_error.t));
+    let live = Journal.balances j in
+    let records = Journal.records j in
     Journal.close j;
+    check_invariants live;
     [%test_result: Record.t list] (Journal.read path |> ok_exn |> fst) ~expect:records;
-    [%test_result: Trial_balance.t * Balances.Hold_state.t list]
-      (summary (Journal.replay path |> ok_exn))
-      ~expect:(summary b);
+    assert (Balances.equal (Journal.replay path |> ok_exn) live);
+    let reopened = Journal.open_ ~fsync:false path |> ok_exn in
+    assert (Balances.equal (Journal.balances reopened) live);
+    Journal.close reopened;
     Core_unix.unlink path);
   Core_unix.rmdir dir
 ;;
@@ -203,9 +258,7 @@ let%expect_test "the generator exercises every kind of entry" =
   Quickcheck.iter gen_ops ~trials:200 ~f:(fun ops ->
     let _, records, _ = run ops in
     List.iter records ~f:(fun (r : Record.t) ->
-      match r.event with
-      | Account_opened _ -> ()
-      | Posted e ->
+      List.iter (Record.entries r) ~f:(fun e ->
         let name =
           match e.kind with
           | Transfer _ -> "transfer"
@@ -213,8 +266,12 @@ let%expect_test "the generator exercises every kind of entry" =
           | Hold_capture _ -> "capture"
           | Hold_release _ -> "release"
           | Reversal _ -> "reversal"
+          | Hold_place_expiring _ -> "hold"
+          | Hold_expire _ -> "expire"
+          | Hold_over_capture _ -> "over-capture"
+          | Hold_increment _ -> "increment"
         in
-        Hashtbl.incr counts name));
+        Hashtbl.incr counts name)));
   print_s [%sexp (Hashtbl.keys counts |> List.sort ~compare:String.compare : string list)];
-  [%expect {| (capture hold release reversal transfer) |}]
+  [%expect {| (capture hold increment over-capture release reversal transfer) |}]
 ;;
