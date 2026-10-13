@@ -1,0 +1,9 @@
+; The executable is named main so it does not clash with the ledger library.
+
+(executable
+ (name main)
+ (public_name ledger)
+ (package ledger)
+ (libraries core core_unix.command_unix core_unix.filename_unix money ledger)
+ (preprocess
+  (pps ppx_jane)))
