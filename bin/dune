@@ -4,6 +4,12 @@
  (name main)
  (public_name ledger)
  (package ledger)
- (libraries core core_unix.command_unix core_unix.filename_unix money ledger)
+ (libraries
+  core
+  core_unix.command_unix
+  core_unix.filename_unix
+  async_kernel
+  money
+  ledger)
  (preprocess
   (pps ppx_jane)))
