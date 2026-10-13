@@ -136,7 +136,7 @@ let check_kind t ~seq (entry : Entry.t) =
       fail
         [%message
           "more than the hold's remaining amount"
-            (h.id : Hold_id.t)
+            ~hold:(h.id : Hold_id.t)
             ~requested:(Amount.to_string amount)
             ~remaining:(Amount.to_string h.remaining)]
     else
@@ -267,7 +267,9 @@ let post t ~seq (entry : Entry.t) =
       List.find entry.postings ~f:(fun p -> Option.is_none (find_account t p.account))
     with
     | Some p ->
-      fail [%message "posting to an account that is not open" (p.account : Account_id.t)]
+      fail
+        [%message
+          "posting to an account that is not open" ~account:(p.account : Account_id.t)]
     | None -> Ok ()
   in
   let%bind holds, reversals = check_kind t ~seq entry in
