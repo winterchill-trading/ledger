@@ -104,7 +104,7 @@ let replay path =
     let%bind.Or_error decoded = decode (In_channel.read_all path) in
     match decoded.tail with
     | Corrupt _ ->
-      Or_error.error_s [%message "corrupt journal" (decoded.tail : Framing.Tail.t)]
+      Or_error.error_s [%message "corrupt journal" ~tail:(decoded.tail : Framing.Tail.t)]
     | Clean | Truncated _ -> fold_records decoded.records)
   |> Or_error.tag_s ~tag:[%message "Journal.replay" path]
 ;;
@@ -127,9 +127,10 @@ let open_ ?time_source ?fsync ?(repair_truncated_tail = false) path =
             [%message
               "journal ends in a partial record (a crash during an append); reopen with \
                repair_truncated_tail to cut it off"
-                (decoded.tail : Framing.Tail.t)]
+                ~tail:(decoded.tail : Framing.Tail.t)]
         | Corrupt _ ->
-          Or_error.error_s [%message "corrupt journal" (decoded.tail : Framing.Tail.t)]
+          Or_error.error_s
+            [%message "corrupt journal" ~tail:(decoded.tail : Framing.Tail.t)]
       in
       let%map.Or_error balances = fold_records decoded.records in
       make
@@ -146,13 +147,19 @@ let open_ ?time_source ?fsync ?(repair_truncated_tail = false) path =
   |> Or_error.tag_s ~tag:[%message "Journal.open_" path]
 ;;
 
-let append_event t (event : Record.Event.t) =
+let writable t =
   match t.state with
+  | `Open -> Ok ()
   | `Closed -> Or_error.error_s [%message "journal is closed" t.path]
   | `Failed error ->
     Or_error.error_s
       [%message "an earlier write failed; reopen the journal" t.path (error : Error.t)]
-  | `Open ->
+;;
+
+let append_event t (event : Record.Event.t) =
+  match writable t with
+  | Error _ as e -> e
+  | Ok () ->
     let record = { Record.seq = Balances.next_seq t.balances; event } in
     let%bind.Or_error balances = Balances.apply t.balances record in
     (match
@@ -170,6 +177,7 @@ let append_event t (event : Record.Event.t) =
 ;;
 
 let open_account t (account : Account.t) =
+  let%bind.Or_error () = writable t in
   match Balances.find_account t.balances account.id with
   | Some existing when Account.equal existing account ->
     let seq =
@@ -187,6 +195,7 @@ let open_account t (account : Account.t) =
    released) but asks for the same kind of entry. Anything else reuses the key for a
    different entry. *)
 let book t ~idempotency_key ~(kind : Entry.Kind.t) (built : Entry.t Or_error.t) =
+  let%bind.Or_error () = writable t in
   match Balances.find_idempotency_key t.balances idempotency_key with
   | None ->
     let%bind.Or_error entry = built in
