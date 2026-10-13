@@ -22,4 +22,7 @@
   dune
   core
   core_unix
-  ppx_jane))
+  async_kernel
+  money
+  ppx_jane
+  (expect_test_helpers_core :with-test)))

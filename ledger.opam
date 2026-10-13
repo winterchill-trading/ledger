@@ -11,7 +11,10 @@ depends: [
   "dune" {>= "3.17"}
   "core"
   "core_unix"
+  "async_kernel"
+  "money"
   "ppx_jane"
+  "expect_test_helpers_core" {with-test}
   "odoc" {with-doc}
 ]
 build: [
