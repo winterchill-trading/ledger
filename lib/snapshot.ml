@@ -83,7 +83,8 @@ let verify t ~journal =
     then Or_error.error_s [%message "snapshot sequence number does not match the journal"]
     else if not (Balances.equal state t.state)
     then Or_error.error_s [%message "replayed state differs from the snapshot"]
-    else if not ([%equal: Balances.Day_row.t list] (Balances.day_rows state) t.rows)
+    else if not
+              ([%equal: Balances.Day_row.t list] (Balances.last_close_rows state) t.rows)
     then Or_error.error_s [%message "replayed day rows differ from the snapshot"]
     else Ok ())
   |> Or_error.tag_s ~tag:[%message "Snapshot.verify" journal]

@@ -663,7 +663,7 @@ let close_day ?business_date ?snapshot_path t =
         Md5.to_hex
           (Md5.digest_string (String.prefix (In_channel.read_all t.path) t.length))
     ; journal_head = t.head
-    ; rows = Balances.day_rows t.balances
+    ; rows = Balances.last_close_rows t.balances
     ; state = t.balances
     }
   in

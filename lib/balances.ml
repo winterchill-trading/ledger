@@ -125,6 +125,7 @@ type t =
   ; last_recorded_at : Time_ns.t option
   ; last_business_date : Date.t option
   ; closed_through : Date.t option
+  ; last_close_rows : Day_row.t list
   }
 
 let empty =
@@ -141,12 +142,14 @@ let empty =
   ; last_recorded_at = None
   ; last_business_date = None
   ; closed_through = None
+  ; last_close_rows = []
   }
 ;;
 
 let next_seq t = t.next_seq
 let last_recorded_at t = t.last_recorded_at
 let closed_through t = t.closed_through
+let last_close_rows t = t.last_close_rows
 let accounts t = Map.data t.accounts
 
 let find_account t id =
@@ -787,6 +790,7 @@ let close_day t ~business_date ~recorded_at =
     Ok
       { t with
         at_close
+      ; last_close_rows = day_rows t
       ; closed_through = Some business_date
       ; last_recorded_at = Some recorded_at
       }
@@ -970,6 +974,7 @@ module Repr = struct
     ; last_recorded_at : Time_ns.Stable.Alternate_sexp.V1.t option
     ; last_business_date : Date.Stable.V1.t option
     ; closed_through : Date.Stable.V1.t option
+    ; last_close_rows : Day_row.Stable.V1.t list
     }
   [@@deriving bin_io, sexp]
 
@@ -1004,6 +1009,7 @@ module Repr = struct
     ; last_recorded_at = t.last_recorded_at
     ; last_business_date = t.last_business_date
     ; closed_through = t.closed_through
+    ; last_close_rows = t.last_close_rows
     }
   ;;
 
@@ -1028,6 +1034,7 @@ module Repr = struct
     ; last_recorded_at = r.last_recorded_at
     ; last_business_date = r.last_business_date
     ; closed_through = r.closed_through
+    ; last_close_rows = r.last_close_rows
     }
   ;;
 end

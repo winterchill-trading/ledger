@@ -192,8 +192,12 @@ module Day_row : sig
   end
 end
 
-(** Rows for every account and currency with postings, sorted. *)
+(** Rows for every account and currency with postings, sorted: movements since the last
+    close, up to now. *)
 val day_rows : t -> Day_row.t list
+
+(** The rows fixed by the last close, for the day it closed. *)
+val last_close_rows : t -> Day_row.t list
 
 (** {2 Serialization}
 
