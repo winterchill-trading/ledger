@@ -4,11 +4,12 @@ open Helpers
 
 let eur_ = Money.Currency.eur
 
-let deposit ?(k = "dep-1") ?(amount = "100.00") b account =
+let deposit ?(k = "dep-1") ?(amount = "100.00") ?(at = at 0) b account =
   post
     b
     (entry
        k
+       ~at
        [ Posting.debit central_bank (eur amount); Posting.credit account (eur amount) ])
 ;;
 
@@ -224,6 +225,7 @@ let%expect_test "holds cannot exceed available funds" =
        b
        (entry
           "spend"
+          ~at:(at 2)
           [ Posting.debit alice (eur "25.00"); Posting.credit bob (eur "25.00") ]));
   (* Capturing more than the hold. *)
   print_error
@@ -243,8 +245,8 @@ let%expect_test "holds cannot exceed available funds" =
     ("entry would take an account below zero" (id customer:alice)
      (balance_after "-0.01 EUR") (idempotency_key h2))
     ("hold id already used" (id auth-1))
-    ("recorded_at goes backwards" (recorded_at "2026-10-01 09:00:00Z")
-     (last "2026-10-01 09:01:00Z"))
+    ("entry would take an account below zero" (id customer:alice)
+     (balance_after "-5.00 EUR") (idempotency_key spend))
     ("more than the hold's remaining amount" (hold auth-1)
      (requested "30.01 EUR") (remaining "30.00 EUR"))
     |}]
@@ -271,6 +273,7 @@ let%expect_test "hand-built hold entries must have the hold shape" =
        b
        (entry
           "c"
+          ~at:(at 2)
           ~kind:(Hold_capture auth)
           [ Posting.debit (Account_id.pending alice) (eur "5.00")
           ; Posting.credit alice (eur "5.00")
@@ -279,21 +282,21 @@ let%expect_test "hand-built hold entries must have the hold shape" =
     {|
     ("a hold moves funds from an account to its own pending sub-account"
      (id auth-9))
-    ("recorded_at goes backwards" (recorded_at "2026-10-01 09:00:00Z")
-     (last "2026-10-01 09:01:00Z"))
+    ("a capture moves funds out of the hold's pending sub-account to other accounts"
+     (id auth-9))
     |}]
 ;;
 
 let%expect_test "reversals" =
-  let rev b k reverses =
+  let rev ?(at = at 5) b k reverses =
     post
       b
       (Reversal.create
          b
          ~reverses:(key reverses)
          ~idempotency_key:(key k)
-         ~effective_at:(at 5)
-         ~recorded_at:(at 5)
+         ~effective_at:at
+         ~recorded_at:at
          ())
   in
   let b = open_chart Balances.empty in
@@ -306,13 +309,13 @@ let%expect_test "reversals" =
   print_error (rev b "rev-3" "nothing");
   print_error (rev b "rev-4" "rev-1");
   (* A reversal must mirror the original exactly. *)
-  let b = deposit b alice ~k:"dep-2" |> ok_exn in
+  let b = deposit b alice ~k:"dep-2" ~at:(at 6) |> ok_exn in
   print_error
     (post
        b
        (entry
           "bad-rev"
-          ~at:(at 5)
+          ~at:(at 6)
           ~kind:(Reversal { reverses = key "dep-2" })
           [ Posting.debit alice (eur "50.00"); Posting.credit central_bank (eur "50.00") ]));
   (* Reversing a deposit already spent would overdraw the customer. *)
@@ -321,32 +324,22 @@ let%expect_test "reversals" =
       b
       (entry
          "spend"
-         ~at:(at 5)
+         ~at:(at 7)
          [ Posting.debit alice (eur "80.00"); Posting.credit bob (eur "80.00") ])
     |> ok_exn
   in
-  print_error (rev b "rev-5" "dep-2");
-  [%expect.unreachable]
-[@@expect.uncaught_exn
-  {|
-  (* CR expect_test_collector: This test expectation appears to contain a backtrace.
-     This is strongly discouraged as backtraces are fragile.
-     Please change this test to not include a backtrace. *)
-  ("recorded_at goes backwards" (recorded_at "2026-10-01 09:00:00Z")
-    (last "2026-10-01 09:05:00Z"))
-  Raised at Base__Error.raise in file "src/error.ml", line 15, characters 38-66
-  Called from Base__Error.raise in file "src/error.ml" (inlined), line 23, characters 47-66
-  Called from Base__Or_error.ok_exn__bits64 in file "src/or_error.ml", line 105, characters 11-26
-  Called from Ledger_test__Test_balances.(fun) in file "ledger/test/test_balances.ml", line 309, characters 10-46
-  Called from Ppx_expect_runtime__Test_block.Configured.dump_backtrace in file "runtime/test_block.ml", line 359, characters 10-25
-
-  Trailing output
-  ---------------
-  (customer:alice (available "0.00 EUR") (held "0.00 EUR") (posted "0.00 EUR"))
-  (rev-1)
-  ("entry already reversed" (reverses dep-1) (by rev-1))
-  ("no entry booked under this key" (reverses nothing))
-  ("only transfers can be reversed; release or capture a hold instead"
-   (reverses rev-1) (original.kind (Reversal (reverses dep-1))))
-  |}]
+  print_error (rev b "rev-5" "dep-2" ~at:(at 8));
+  [%expect
+    {|
+    (customer:alice (available "0.00 EUR") (held "0.00 EUR") (posted "0.00 EUR"))
+    (rev-1)
+    ("entry already reversed" (reverses dep-1) (by rev-1))
+    ("no entry booked under this key" (reverses nothing))
+    ("only transfers can be reversed; release or capture a hold instead"
+     (reverses rev-1) (original.kind (Reversal (reverses dep-1))))
+    ("a reversal must post the original's postings on the opposite sides"
+     (reverses dep-2))
+    ("entry would take an account below zero" (id customer:alice)
+     (balance_after "-80.00 EUR") (idempotency_key rev-5))
+    |}]
 ;;
