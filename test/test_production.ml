@@ -692,3 +692,137 @@ let%expect_test "safeguarding reconciliation" =
       (house_position "-30.00 EUR")))
     |}]
 ;;
+
+let%expect_test "hold entries carry SCA evidence" =
+  with_dir (fun dir ->
+    let _, j, deposit = setup dir in
+    deposit alice "100.00";
+    let h = Hold_id.of_string "auth-sca" in
+    let ok r = ignore (ok_exn r : Journal.Append_result.t) in
+    let now () = Journal.now j in
+    ok
+      (Journal.hold
+         j
+         ~hold_id:h
+         ~account:alice
+         ~amount:(eur "20.00")
+         ~sca:(Challenge "sca-chl-1")
+         ~idempotency_key:(key "auth")
+         ~effective_at:(now ())
+         ());
+    ok
+      (Journal.increment
+         j
+         ~hold_id:h
+         ~amount:(eur "5.00")
+         ~sca:(Exemption "low_value")
+         ~idempotency_key:(key "inc")
+         ~effective_at:(now ())
+         ());
+    ok
+      (Journal.capture
+         j
+         ~hold_id:h
+         ~amount:(eur "10.00")
+         ~sca:(Challenge "sca-chl-1")
+         ~to_:card_scheme
+         ~idempotency_key:(key "clear-1")
+         ~effective_at:(now ())
+         ());
+    ok
+      (Journal.over_capture
+         j
+         ~hold_id:h
+         ~amount:(eur "16.00")
+         ~reason:"tip"
+         ~sca:(Exemption "merchant_initiated")
+         ~to_:card_scheme
+         ~idempotency_key:(key "clear-2")
+         ~effective_at:(now ())
+         ());
+    let b = Journal.balances j in
+    List.iter [ "auth"; "inc"; "clear-1"; "clear-2" ] ~f:(fun k ->
+      let _, (e : Entry.t) = Balances.find_entry b (key k) |> Option.value_exn in
+      print_s [%message k ~sca:(e.sca : Sca_evidence.t option)]);
+    (* The evidence survives the journal file. *)
+    Journal.close j;
+    let replayed = Journal.replay (dir ^/ "j.bin") |> ok_exn in
+    let _, e = Balances.find_entry replayed (key "auth") |> Option.value_exn in
+    print_s [%sexp (e.sca : Sca_evidence.t option)]);
+  [%expect
+    {|
+    (auth (sca ((Challenge sca-chl-1))))
+    (inc (sca ((Exemption low_value))))
+    (clear-1 (sca ((Challenge sca-chl-1))))
+    (clear-2 (sca ((Exemption merchant_initiated))))
+    ((Challenge sca-chl-1))
+    |}]
+;;
+
+let%expect_test "linked groups on a frozen clock get increasing ledger timestamps" =
+  with_dir (fun dir ->
+    (* The clock never moves: every timestamp comes from the ledger's own increasing
+       assignment, whether the record is a group, a refusal or a single entry. *)
+    let _, j, deposit = setup dir in
+    deposit alice "100.00";
+    let group prefix ~amount =
+      List.map [ "a"; "b"; "c" ] ~f:(fun leg ->
+        entry
+          (prefix ^ "-" ^ leg)
+          ~at:(at 0)
+          [ Posting.debit alice (eur amount); Posting.credit bob (eur amount) ]
+        |> ok_exn)
+    in
+    let show_result r =
+      print_s [%sexp (Or_error.map r ~f:Journal.Append_result.seq : int Or_error.t)]
+    in
+    show_result (Journal.append_linked j (group "g1" ~amount:"1.00"));
+    (* Too much for Alice: refused as a whole, its keys remembered. *)
+    show_result
+      (Journal.append_linked j (group "g2" ~amount:"50.00")
+       |> Result.map_error ~f:(fun _ -> Error.of_string "refused"));
+    show_result (Journal.append_linked j (group "g3" ~amount:"1.00"));
+    show_result (Journal.append_linked j (group "g4" ~amount:"1.00"));
+    deposit alice "1.00" ~k:"dep-2";
+    let stamps =
+      Journal.records j
+      |> List.filter_map ~f:(fun (r : Record.t) ->
+        match r.event with
+        | Posted e -> Some [ r.seq, e.recorded_at ]
+        | Linked es -> Some (List.map es ~f:(fun e -> r.seq, e.recorded_at))
+        | Rejected { recorded_at; _ } -> Some [ r.seq, recorded_at ]
+        | _ -> None)
+      |> List.concat
+    in
+    List.iter stamps ~f:(fun (seq, at) ->
+      print_endline
+        (sprintf
+           "%3d %s"
+           seq
+           (Time_ns.to_string_iso8601_basic at ~zone:Time_float.Zone.utc)));
+    let times = List.map stamps ~f:snd in
+    assert (List.is_sorted_strictly times ~compare:Time_ns.compare);
+    Journal.close j;
+    ignore (Journal.replay (dir ^/ "j.bin") |> ok_exn : Balances.t));
+  [%expect
+    {|
+    (Ok 11)
+    (Error refused)
+    (Ok 15)
+    (Ok 16)
+     10 2026-10-01T09:00:00.000000000Z
+     11 2026-10-01T09:00:00.000000001Z
+     11 2026-10-01T09:00:00.000000002Z
+     11 2026-10-01T09:00:00.000000003Z
+     12 2026-10-01T09:00:00.000000004Z
+     13 2026-10-01T09:00:00.000000005Z
+     14 2026-10-01T09:00:00.000000006Z
+     15 2026-10-01T09:00:00.000000007Z
+     15 2026-10-01T09:00:00.000000008Z
+     15 2026-10-01T09:00:00.000000009Z
+     16 2026-10-01T09:00:00.000000010Z
+     16 2026-10-01T09:00:00.000000011Z
+     16 2026-10-01T09:00:00.000000012Z
+     17 2026-10-01T09:00:00.000000013Z
+    |}]
+;;
