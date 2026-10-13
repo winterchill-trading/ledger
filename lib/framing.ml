@@ -10,7 +10,11 @@ let max_payload = 64 * 1024 * 1024
    last frame (which a repair would cut off, taking good frames with it). *)
 let size_length = 16
 let checksum_length = 16
-let frame_overhead = size_length + checksum_length
+let link_length = 32
+let frame_overhead = size_length + checksum_length + link_length
+let genesis = String.make link_length '\000'
+let sha256 s = Cryptokit.hash_string (Cryptokit.Hash.sha256 ()) s
+let to_hex s = Cryptokit.transform_string (Cryptokit.Hexa.encode ()) s
 
 let header ~digest =
   if String.length digest <> digest_length
@@ -18,7 +22,9 @@ let header ~digest =
   magic ^ digest
 ;;
 
-let encode_frame (writer : _ Bin_prot.Type_class.writer) v =
+let encode_frame ~prev (writer : _ Bin_prot.Type_class.writer) v =
+  if String.length prev <> link_length
+  then raise_s [%message "Framing.encode_frame: prev must be a 32-byte hash"];
   let payload = Bigstring.to_string (Bin_prot.Utils.bin_dump writer v) in
   let len = String.length payload in
   let buf = Bytes.create (frame_overhead + len) in
@@ -30,8 +36,14 @@ let encode_frame (writer : _ Bin_prot.Type_class.writer) v =
     ~dst:buf
     ~dst_pos:size_length
     ~len:checksum_length;
+  Bytes.From_string.blit
+    ~src:prev
+    ~src_pos:0
+    ~dst:buf
+    ~dst_pos:(size_length + checksum_length)
+    ~len:link_length;
   Bytes.From_string.blit ~src:payload ~src_pos:0 ~dst:buf ~dst_pos:frame_overhead ~len;
-  Bytes.to_string buf
+  Bytes.to_string buf, sha256 payload
 ;;
 
 module Tail = struct
@@ -52,6 +64,7 @@ type 'a decoded =
   { digest : string
   ; records : 'a list
   ; valid_length : int
+  ; head : string
   ; tail : Tail.t
   }
 
@@ -64,7 +77,7 @@ let decode_payload (reader : _ Bin_prot.Type_class.reader) payload =
   | exception exn -> Error (sprintf "payload does not decode: %s" (Exn.to_string exn))
 ;;
 
-let decode ~accept reader contents =
+let decode ?start ~accept reader contents =
   let total = String.length contents in
   if total < header_length || not (String.is_prefix contents ~prefix:magic)
   then
@@ -80,10 +93,10 @@ let decode ~accept reader contents =
             (digest : string)
             (accept : string list)]
     else (
-      let rec loop offset acc =
+      let rec loop offset prev acc =
         let remaining = total - offset in
         let finish tail =
-          Ok { digest; records = List.rev acc; valid_length = offset; tail }
+          Ok { digest; records = List.rev acc; valid_length = offset; head = prev; tail }
         in
         if remaining = 0
         then finish Clean
@@ -105,12 +118,25 @@ let decode ~accept reader contents =
                 String.sub contents ~pos:(offset + size_length) ~len:checksum_length
               in
               let payload = String.sub contents ~pos:(offset + frame_overhead) ~len in
+              let link =
+                String.sub
+                  contents
+                  ~pos:(offset + size_length + checksum_length)
+                  ~len:link_length
+              in
               if not (String.equal checksum (Md5.to_binary (Md5.digest_string payload)))
               then finish (Corrupt { offset; reason = "checksum mismatch" })
+              else if not (String.equal link prev)
+              then finish (Corrupt { offset; reason = "chain broken" })
               else (
                 match decode_payload reader payload with
                 | Error reason -> finish (Corrupt { offset; reason })
-                | Ok v -> loop (offset + frame_overhead + len) (v :: acc)))))
+                | Ok v -> loop (offset + frame_overhead + len) (sha256 payload) (v :: acc)))))
       in
-      loop header_length []))
+      let start, prev = Option.value start ~default:(header_length, genesis) in
+      if start < header_length || start > total
+      then
+        Or_error.error_s
+          [%message "start offset outside the file" (start : int) (total : int)]
+      else loop start prev []))
 ;;

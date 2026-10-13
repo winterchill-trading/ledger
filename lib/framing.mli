@@ -5,8 +5,15 @@
     frame* : payload length, 8-byte little-endian
              ++ the same length bitwise complemented (8 bytes)
              ++ MD5 of the payload (16 bytes)
+             ++ SHA-256 of the previous frame's payload (32 bytes; zeros for the first)
              ++ payload (bin_io of one record)
     v}
+
+    The SHA-256 links make the file a hash chain: changing, removing or reordering any
+    frame breaks the link of the frame after it ([Corrupt] with reason ["chain broken"]),
+    even if whoever changed it also fixed the MD5. Only the last frame is not covered by a
+    later link; {!decoded.head}, its hash, is the value to keep somewhere else (snapshots
+    record it) to cover that too.
 
     Files are only appended to. A crash in the middle of an append leaves a partial last
     frame ({!Tail.Truncated}); any other damage (a flipped bit, a frame from another file
@@ -32,7 +39,15 @@ val max_payload : int
 (** Raises unless [digest] is 32 characters. *)
 val header : digest:string -> string
 
-val encode_frame : 'a Bin_prot.Type_class.writer -> 'a -> string
+(** The [prev] of the first frame: 32 zero bytes. *)
+val genesis : string
+
+(** [encode_frame ~prev writer v] is the frame and the SHA-256 of its payload (the [prev]
+    of the next frame). *)
+val encode_frame : prev:string -> 'a Bin_prot.Type_class.writer -> 'a -> string * string
+
+(** Lowercase hex, for printing hashes. *)
+val to_hex : string -> string
 
 module Tail : sig
   type t =
@@ -52,13 +67,17 @@ type 'a decoded =
   { digest : string (** from the header *)
   ; records : 'a list (** in file order, up to the first damaged frame *)
   ; valid_length : int (** bytes of header and complete, intact frames *)
+  ; head : string (** SHA-256 of the last intact frame's payload, or [prev] if none *)
   ; tail : Tail.t
   }
 
 (** Decodes a whole file. Errors (rather than returning records) only when the header is
     missing, short, or names a digest not in [accept]. *)
 val decode
-  :  accept:string list
+  :  ?start:int * string
+       (** offset of a frame boundary to start at, after a part already decoded, and the
+           hash of the frame before it (default: just after the header, {!genesis}) *)
+  -> accept:string list
   -> 'a Bin_prot.Type_class.reader
   -> string
   -> 'a decoded Or_error.t
