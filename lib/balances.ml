@@ -579,6 +579,7 @@ let check_kind t (entry : Entry.t) ~currency =
             && List.for_all back ~f:(fun (m : Posting.t) ->
               Side.equal m.side (Side.flip out))
             && List.length back <= 1
+            && (not (List.is_empty others))
             && not (List.exists others ~f:(fun o -> Account_id.is_pending o.account)) ->
        let back_amount =
          List.fold back ~init:(Amount.zero currency) ~f:(fun acc m ->
