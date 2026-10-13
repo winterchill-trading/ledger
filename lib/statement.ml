@@ -115,10 +115,10 @@ let kind_to_string : Entry.Kind.t -> string = function
 ;;
 
 let to_string_hum t =
-  let time ts = Time_ns.to_string_iso8601_basic ts ~zone:Time_float.Zone.utc in
+  let time ts = Time_ns.to_sec_string ts ~zone:Time_float.Zone.utc in
   let row seq date kind reference debit credit balance =
     sprintf
-      "%5s  %-27s  %-22s %-14s %16s %16s %16s"
+      "%5s  %-19s  %-18s %-14s %14s %14s %14s"
       seq
       date
       kind
