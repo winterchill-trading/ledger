@@ -15,6 +15,7 @@ let place
   ?expires_at
   ~idempotency_key
   ?code
+  ?sca
   ?reference
   ?remittance_info
   ~effective_at
@@ -34,6 +35,7 @@ let place
          | None -> Hold_place hold_id
          | Some expires_at -> Hold_place_expiring { hold = hold_id; expires_at })
       ?code
+      ?sca
       ?reference
       ?remittance_info
       ~effective_at
@@ -58,6 +60,7 @@ let return_entry
   ?amount
   ~idempotency_key
   ?code
+  ?sca
   ?reference
   ~effective_at
   ~recorded_at
@@ -70,6 +73,7 @@ let return_entry
     ~idempotency_key
     ~kind
     ?code
+    ?sca
     ?reference
     ~effective_at
     ~recorded_at
@@ -84,6 +88,7 @@ let increment
   ~amount
   ~idempotency_key
   ?code
+  ?sca
   ?reference
   ~effective_at
   ~recorded_at
@@ -95,6 +100,7 @@ let increment
     ~idempotency_key
     ~kind:(Hold_increment hold_id)
     ?code
+    ?sca
     ?reference
     ~effective_at
     ~recorded_at
@@ -125,6 +131,7 @@ let capture_split
   payees
   ~idempotency_key
   ?code
+  ?sca
   ?reference
   ?remittance_info
   ~effective_at
@@ -149,6 +156,7 @@ let capture_split
     ~idempotency_key
     ~kind:(Hold_capture hold_id)
     ?code
+    ?sca
     ?reference
     ?remittance_info
     ~effective_at
@@ -166,6 +174,7 @@ let capture
   ~to_
   ~idempotency_key
   ?code
+  ?sca
   ?reference
   ?remittance_info
   ~effective_at
@@ -180,6 +189,7 @@ let capture
     [ to_, Option.value amount ~default:h.remaining ]
     ~idempotency_key
     ?code
+    ?sca
     ?reference
     ?remittance_info
     ~effective_at
@@ -195,6 +205,7 @@ let over_capture
   ~to_
   ~idempotency_key
   ?code
+  ?sca
   ?reference
   ?remittance_info
   ~effective_at
@@ -218,6 +229,7 @@ let over_capture
       ~idempotency_key
       ~kind:(Hold_over_capture { hold = hold_id; reason })
       ?code
+      ?sca
       ?reference
       ?remittance_info
       ~effective_at

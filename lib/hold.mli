@@ -30,6 +30,7 @@ val place
   -> ?expires_at:Time_ns.t
   -> idempotency_key:Idempotency_key.t
   -> ?code:Entry.Code.t
+  -> ?sca:Sca_evidence.t
   -> ?reference:string
   -> ?remittance_info:string
   -> effective_at:Time_ns.t
@@ -45,6 +46,7 @@ val increment
   -> amount:Money.Amount.t
   -> idempotency_key:Idempotency_key.t
   -> ?code:Entry.Code.t
+  -> ?sca:Sca_evidence.t
   -> ?reference:string
   -> effective_at:Time_ns.t
   -> recorded_at:Time_ns.t
@@ -58,6 +60,7 @@ val release
   -> ?amount:Money.Amount.t
   -> idempotency_key:Idempotency_key.t
   -> ?code:Entry.Code.t
+  -> ?sca:Sca_evidence.t
   -> ?reference:string
   -> effective_at:Time_ns.t
   -> recorded_at:Time_ns.t
@@ -73,6 +76,7 @@ val capture
   -> to_:Account_id.t
   -> idempotency_key:Idempotency_key.t
   -> ?code:Entry.Code.t
+  -> ?sca:Sca_evidence.t
   -> ?reference:string
   -> ?remittance_info:string
   -> effective_at:Time_ns.t
@@ -88,6 +92,7 @@ val capture_split
   -> (Account_id.t * Money.Amount.t) list
   -> idempotency_key:Idempotency_key.t
   -> ?code:Entry.Code.t
+  -> ?sca:Sca_evidence.t
   -> ?reference:string
   -> ?remittance_info:string
   -> effective_at:Time_ns.t
@@ -105,6 +110,7 @@ val over_capture
   -> to_:Account_id.t
   -> idempotency_key:Idempotency_key.t
   -> ?code:Entry.Code.t
+  -> ?sca:Sca_evidence.t
   -> ?reference:string
   -> ?remittance_info:string
   -> effective_at:Time_ns.t
