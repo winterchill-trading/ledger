@@ -398,6 +398,7 @@ let transfer
   ~idempotency_key
   ?(tag = "transfer")
   ?code
+  ?sca
   ?reference
   ?remittance_info
   ~effective_at
@@ -412,6 +413,7 @@ let transfer
        ~idempotency_key
        ~kind
        ?code
+       ?sca
        ?reference
        ?remittance_info
        ~effective_at
@@ -427,6 +429,7 @@ let hold
   ?timeout
   ~idempotency_key
   ?code
+  ?sca
   ?reference
   ?remittance_info
   ~effective_at
@@ -443,6 +446,7 @@ let hold
       ?expires_at
       ~idempotency_key
       ?code
+      ?sca
       ?reference
       ?remittance_info
       ~effective_at
@@ -458,7 +462,7 @@ let hold
   | _ -> book_built t ~idempotency_key ~kind:(Hold_place hold_id) built
 ;;
 
-let release t ~hold_id ?amount ~idempotency_key ?code ?reference ~effective_at () =
+let release t ~hold_id ?amount ~idempotency_key ?code ?sca ?reference ~effective_at () =
   book_built
     t
     ~idempotency_key
@@ -469,6 +473,7 @@ let release t ~hold_id ?amount ~idempotency_key ?code ?reference ~effective_at (
        ?amount
        ~idempotency_key
        ?code
+       ?sca
        ?reference
        ~effective_at
        ~recorded_at:(now t)
@@ -483,6 +488,7 @@ let capture
   ~to_
   ~idempotency_key
   ?code
+  ?sca
   ?reference
   ?remittance_info
   ~effective_at
@@ -500,6 +506,7 @@ let capture
        ~to_
        ~idempotency_key
        ?code
+       ?sca
        ?reference
        ?remittance_info
        ~effective_at
@@ -507,7 +514,7 @@ let capture
        ())
 ;;
 
-let increment t ~hold_id ~amount ~idempotency_key ?code ?reference ~effective_at () =
+let increment t ~hold_id ~amount ~idempotency_key ?code ?sca ?reference ~effective_at () =
   book_built
     t
     ~idempotency_key
@@ -518,6 +525,7 @@ let increment t ~hold_id ~amount ~idempotency_key ?code ?reference ~effective_at
        ~amount
        ~idempotency_key
        ?code
+       ?sca
        ?reference
        ~effective_at
        ~recorded_at:(now t)
@@ -531,6 +539,7 @@ let capture_split
   payees
   ~idempotency_key
   ?code
+  ?sca
   ?reference
   ?remittance_info
   ~effective_at
@@ -547,6 +556,7 @@ let capture_split
        payees
        ~idempotency_key
        ?code
+       ?sca
        ?reference
        ?remittance_info
        ~effective_at
@@ -562,6 +572,7 @@ let over_capture
   ~to_
   ~idempotency_key
   ?code
+  ?sca
   ?reference
   ?remittance_info
   ~effective_at
@@ -579,6 +590,7 @@ let over_capture
        ~to_
        ~idempotency_key
        ?code
+       ?sca
        ?reference
        ?remittance_info
        ~effective_at
