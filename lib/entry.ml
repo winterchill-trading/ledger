@@ -1,5 +1,41 @@
 open! Core
 
+module Code = struct
+  module Stable = struct
+    module V1 = struct
+      type t =
+        | Deposit
+        | Withdrawal
+        | Transfer_intraledger
+        | Fx_leg
+        | Fee
+        | Card_auth
+        | Card_settlement
+        | Refund
+        | Reversal
+        | Return
+        | Recall
+        | Adjustment of
+            { maker : string
+            ; checker : string
+            ; reason : string
+            ; ticket : string
+            }
+        | Interest
+        | Safeguarding_sweep
+        | Hold
+      [@@deriving bin_io, sexp, compare, equal]
+    end
+  end
+
+  include Stable.V1
+
+  let to_string = function
+    | Adjustment _ -> "ADJUSTMENT"
+    | t -> String.uppercase (Sexp.to_string (sexp_of_t t))
+  ;;
+end
+
 module Kind = struct
   module Stable = struct
     module V1 = struct
@@ -8,21 +44,46 @@ module Kind = struct
         | Hold_place of Hold_id.Stable.V1.t
         | Hold_release of Hold_id.Stable.V1.t
         | Hold_capture of Hold_id.Stable.V1.t
-        | Reversal of { reverses : int }
+        | Reversal of { reverses : Idempotency_key.Stable.V1.t }
+        | Hold_place_expiring of
+            { hold : Hold_id.Stable.V1.t
+            ; expires_at : Time_ns.Stable.Alternate_sexp.V1.t
+            }
+        | Hold_expire of Hold_id.Stable.V1.t
+        | Hold_over_capture of
+            { hold : Hold_id.Stable.V1.t
+            ; reason : string
+            }
+        | Hold_increment of Hold_id.Stable.V1.t
       [@@deriving bin_io, sexp, compare, equal]
     end
   end
 
   include Stable.V1
+
+  let hold = function
+    | Transfer _ | Reversal _ -> None
+    | Hold_place hold
+    | Hold_release hold
+    | Hold_capture hold
+    | Hold_expire hold
+    | Hold_increment hold
+    | Hold_place_expiring { hold; _ }
+    | Hold_over_capture { hold; _ } -> Some hold
+  ;;
 end
 
 module Repr = struct
   type t =
     { idempotency_key : Idempotency_key.Stable.V1.t
     ; kind : Kind.Stable.V1.t
+    ; code : Code.Stable.V1.t
     ; reference : string
+    ; remittance_info : string
     ; effective_at : Time_ns.Stable.Alternate_sexp.V1.t
     ; recorded_at : Time_ns.Stable.Alternate_sexp.V1.t
+    ; business_date : Date.Stable.V1.t
+    ; sca : Sca_evidence.Stable.V1.t option
     ; postings : Posting.Stable.V1.t list
     }
   [@@deriving bin_io, sexp, compare, equal]
@@ -32,6 +93,20 @@ include Repr
 
 let validate (t : t) =
   let open Or_error.Let_syntax in
+  let%bind () =
+    match t.code with
+    | Adjustment { maker; checker; reason; ticket } ->
+      if List.exists [ maker; checker; reason; ticket ] ~f:String.is_empty
+      then
+        Or_error.error_s
+          [%message "an adjustment needs a maker, a checker, a reason and a ticket"]
+      else if String.equal maker checker
+      then
+        Or_error.error_s
+          [%message "an adjustment's maker and checker must differ" maker checker]
+      else Ok ()
+    | _ -> Ok ()
+  in
   match t.postings with
   | [] | [ _ ] ->
     Or_error.error_s
@@ -68,8 +143,52 @@ let validate (t : t) =
             ~idempotency_key:(t.idempotency_key : Idempotency_key.t)]
 ;;
 
-let create ~idempotency_key ~kind ?(reference = "") ~effective_at ~recorded_at postings =
-  let t = { idempotency_key; kind; reference; effective_at; recorded_at; postings } in
+let utc_date time = Time_ns.to_date time ~zone:Time_float.Zone.utc
+
+let default_code : Kind.t -> Code.t = function
+  | Transfer _ -> Transfer_intraledger
+  | Reversal _ -> Reversal
+  | Hold_place _
+  | Hold_release _
+  | Hold_capture _
+  | Hold_place_expiring _
+  | Hold_expire _
+  | Hold_increment _
+  | Hold_over_capture _ -> Hold
+;;
+
+let create
+  ~idempotency_key
+  ~kind
+  ?(code = default_code kind)
+  ?(reference = "")
+  ?(remittance_info = "")
+  ?business_date
+  ?sca
+  ~effective_at
+  ~recorded_at
+  postings
+  =
+  let t =
+    { idempotency_key
+    ; kind
+    ; code
+    ; reference
+    ; remittance_info
+    ; effective_at
+    ; recorded_at
+    ; business_date = Option.value business_date ~default:(utc_date recorded_at)
+    ; sca
+    ; postings
+    }
+  in
+  Or_error.map (validate t) ~f:(fun () -> t)
+;;
+
+let restamp t ~recorded_at ~business_date = { t with recorded_at; business_date }
+
+let with_code t code =
+  let t = { t with code } in
   Or_error.map (validate t) ~f:(fun () -> t)
 ;;
 
@@ -86,7 +205,9 @@ let total t =
       | Credit -> acc)
 ;;
 
-let same_request a b = equal a { b with recorded_at = a.recorded_at }
+let same_request a b =
+  equal a { b with recorded_at = a.recorded_at; business_date = a.business_date }
+;;
 
 module Stable = struct
   module V1 = struct

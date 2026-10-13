@@ -84,8 +84,9 @@ let%expect_test "decoding validates again" =
     (Binable.of_string (module Entry.Stable.V1) bin);
   [%expect
     {|
-    ((idempotency_key k) (kind (Transfer transfer)) (reference "")
-     (effective_at "2026-10-01 09:00:00Z") (recorded_at "2026-10-01 09:00:00Z")
+    ((idempotency_key k) (kind (Transfer transfer)) (code Transfer_intraledger)
+     (reference "") (remittance_info "") (effective_at "2026-10-01 09:00:00Z")
+     (recorded_at "2026-10-01 09:00:00Z") (business_date 2026-10-01) (sca ())
      (postings
       (((account bank:central) (side Debit) (amount "1.00 EUR"))
        ((account customer:alice) (side Credit) (amount "1.00 EUR")))))
