@@ -62,7 +62,19 @@ let show_balance b account currency =
         ~posted:(Money.Amount.to_string (Balances.posted b account currency))]
 ;;
 
-let print_error = function
+(* [dir] (a temporary directory) is printed as $DIR so expect output is stable. *)
+let print_error ?dir = function
   | Ok _ -> print_endline "ok"
-  | Error e -> print_s [%sexp (e : Error.t)]
+  | Error e ->
+    (* Replace inside the atoms, before printing, so line wrapping does not depend on how
+       long the temporary path is (macOS and Linux differ). *)
+    let rec mask : Sexp.t -> Sexp.t = function
+      | Atom a ->
+        Atom
+          (match dir with
+           | None -> a
+           | Some dir -> String.substr_replace_all a ~pattern:dir ~with_:"$DIR")
+      | List l -> List (List.map l ~f:mask)
+    in
+    print_s (mask [%sexp (e : Error.t)])
 ;;
