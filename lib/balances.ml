@@ -258,7 +258,7 @@ let post t ~seq (entry : Entry.t) =
       fail
         [%message
           "idempotency key already booked"
-            (entry.idempotency_key : Idempotency_key.t)
+            ~idempotency_key:(entry.idempotency_key : Idempotency_key.t)
             (booked_at : int)]
     | None -> Ok ()
   in
@@ -306,7 +306,7 @@ let post t ~seq (entry : Entry.t) =
         "entry would take an account below zero"
           (id : Account_id.t)
           ~balance_after:(Amount.to_string (balance t' id currency))
-          (entry.idempotency_key : Idempotency_key.t)]
+          ~idempotency_key:(entry.idempotency_key : Idempotency_key.t)]
 ;;
 
 let apply t ({ seq; event } : Record.t) =

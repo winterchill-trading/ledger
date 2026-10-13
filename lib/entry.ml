@@ -36,7 +36,8 @@ let validate (t : t) =
   | [] | [ _ ] ->
     Or_error.error_s
       [%message
-        "an entry needs at least two postings" (t.idempotency_key : Idempotency_key.t)]
+        "an entry needs at least two postings"
+          ~idempotency_key:(t.idempotency_key : Idempotency_key.t)]
   | first :: _ ->
     let currency = Money.Amount.currency first.amount in
     let%bind () =
@@ -50,7 +51,8 @@ let validate (t : t) =
       | None -> Ok ()
       | Some msg ->
         Or_error.error_s
-          [%message "" ~_:(msg : Sexp.t) (t.idempotency_key : Idempotency_key.t)]
+          [%message
+            "" ~_:(msg : Sexp.t) ~idempotency_key:(t.idempotency_key : Idempotency_key.t)]
     in
     let net =
       List.fold t.postings ~init:(Money.Amount.zero currency) ~f:(fun acc p ->
@@ -63,7 +65,7 @@ let validate (t : t) =
         [%message
           "unbalanced entry: debits minus credits is not zero"
             ~debits_minus_credits:(Money.Amount.to_string net)
-            (t.idempotency_key : Idempotency_key.t)]
+            ~idempotency_key:(t.idempotency_key : Idempotency_key.t)]
 ;;
 
 let create ~idempotency_key ~kind ?(reference = "") ~effective_at ~recorded_at postings =
