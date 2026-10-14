@@ -19,6 +19,9 @@ type t =
   ; time_source : read Time_source.T1.t
   ; fsync : bool
   ; remember_refusals : bool
+  ; refusal_retention : Time_ns.Span.t option
+  ; mutable refusal_times : Time_ns.t Idempotency_key.Map.t
+      (* when each remembered refusal was recorded; kept only with a retention window *)
   ; mutable length : int (* bytes in the file, header included *)
   ; mutable head : string (* hash of the last frame's payload; the next frame's link *)
   ; mutable balances : Balances.t
@@ -88,11 +91,30 @@ let fsync_dir_of path =
   Exn.protect ~f:(fun () -> Core_unix.fsync dir) ~finally:(fun () -> Core_unix.close dir)
 ;;
 
+(* Follows the refusals a record adds or drops, for the retention window. *)
+let track_refusals times (r : Record.t) =
+  match r.event with
+  | Rejected { idempotency_key; recorded_at; _ } ->
+    Map.set times ~key:idempotency_key ~data:recorded_at
+  | Refusals_forgotten { idempotency_keys; _ } ->
+    List.fold idempotency_keys ~init:times ~f:Map.remove
+  | _ -> times
+;;
+
+let check_retention = function
+  | Some span when Time_ns.Span.(span <= zero) ->
+    Or_error.error_s
+      [%message "refusal_retention must be positive" (span : Time_ns.Span.t)]
+  | Some _ | None -> Ok ()
+;;
+
 let make
   ?time_source
   ?(fsync = true)
   ?(remember_refusals = true)
+  ?refusal_retention
   ?(keep_records = true)
+  ?(refusal_times = Idempotency_key.Map.empty)
   ~path
   ~fd
   ~length
@@ -112,6 +134,8 @@ let make
   ; time_source
   ; fsync
   ; remember_refusals
+  ; refusal_retention
+  ; refusal_times
   ; length
   ; head
   ; balances
@@ -121,8 +145,9 @@ let make
   }
 ;;
 
-let create ?time_source ?fsync ?remember_refusals ?keep_records path =
+let create ?time_source ?fsync ?remember_refusals ?refusal_retention ?keep_records path =
   Or_error.try_with_join (fun () ->
+    let%bind.Or_error () = check_retention refusal_retention in
     let fd =
       Core_unix.openfile path ~mode:[ O_WRONLY; O_CREAT; O_EXCL; O_APPEND ] ~perm:0o644
     in
@@ -137,6 +162,7 @@ let create ?time_source ?fsync ?remember_refusals ?keep_records path =
       ?time_source
       ?fsync
       ?remember_refusals
+      ?refusal_retention
       ?keep_records
       ~path
       ~fd
@@ -203,12 +229,14 @@ let open_
   ?time_source
   ?fsync
   ?remember_refusals
+  ?refusal_retention
   ?keep_records
   ?(repair_truncated_tail = false)
   ?snapshot
   path
   =
   Or_error.try_with_join (fun () ->
+    let%bind.Or_error () = check_retention refusal_retention in
     let fd = Core_unix.openfile path ~mode:[ O_RDWR; O_APPEND ] in
     let%bind.Or_error () = lock ~path fd in
     let result =
@@ -225,9 +253,27 @@ let open_
              Or_error.error_s [%message "snapshot does not match this journal"])
       in
       let keep = Option.value keep_records ~default:true in
-      let%bind (balances, records_rev), summary =
-        fold_file ?start ~init path ~acc:[] ~f:(fun acc r ->
-          if keep then r :: acc else acc)
+      let track = Option.is_some refusal_retention in
+      (* Refusals a snapshot covers have no time in the state; the close that wrote the
+         snapshot is a safe stand-in, since it is no earlier than any of them. *)
+      let covered_times =
+        if not track
+        then Idempotency_key.Map.empty
+        else (
+          let at = Option.value (Balances.last_recorded_at init) ~default:Time_ns.epoch in
+          Balances.refusals init
+          |> List.map ~f:(fun (key, _seq) -> key, at)
+          |> Idempotency_key.Map.of_alist_exn)
+      in
+      let%bind (balances, (records_rev, refusal_times)), summary =
+        fold_file
+          ?start
+          ~init
+          path
+          ~acc:([], covered_times)
+          ~f:(fun (records_rev, times) r ->
+            ( (if keep then r :: records_rev else records_rev)
+            , if track then track_refusals times r else times ))
       in
       let%bind () =
         match summary.tail with
@@ -251,7 +297,9 @@ let open_
            ?time_source
            ?fsync
            ?remember_refusals
+           ?refusal_retention
            ?keep_records
+           ~refusal_times
            ~path
            ~fd
            ~length:summary.valid_length
@@ -310,6 +358,8 @@ let write_event t (event : Record.Event.t) =
     t.balances <- balances;
     t.length <- t.length + String.length frame;
     t.head <- hash;
+    if Option.is_some t.refusal_retention
+    then t.refusal_times <- track_refusals t.refusal_times record;
     Option.iter t.records_rev ~f:(fun rs -> t.records_rev <- Some (record :: rs));
     Ok record
   | exception exn ->
@@ -404,6 +454,42 @@ let stamp t (entries : Entry.t list) =
       ~business_date:(business_date_at t first))
 ;;
 
+(* Refusals among [keys] (default: all) recorded more than the retention window ago. *)
+let expired_refusals ?keys t =
+  match t.refusal_retention with
+  | None -> []
+  | Some retention ->
+    let cutoff = Time_ns.sub (now t) retention in
+    let expired key =
+      match Map.find t.refusal_times key with
+      | Some at -> Time_ns.( <= ) at cutoff
+      | None -> false
+    in
+    (match keys with
+     | None ->
+       Map.keys (Map.filter t.refusal_times ~f:(fun at -> Time_ns.( <= ) at cutoff))
+     | Some keys ->
+       List.dedup_and_sort keys ~compare:Idempotency_key.compare |> List.filter ~f:expired)
+;;
+
+let forget keys t =
+  match keys with
+  | [] -> Ok None
+  | idempotency_keys ->
+    let%map.Or_error r =
+      write_event t (Refusals_forgotten { idempotency_keys; recorded_at = now t })
+    in
+    Some (Append_result.Appended r)
+;;
+
+let forget_expired_refusals t =
+  let%bind.Or_error () = writable t in
+  forget (expired_refusals t) t
+;;
+
+(* A request under a key whose refusal is past the window is new again. *)
+let forget_expired_among t keys = Or_error.ignore_m (forget (expired_refusals ~keys t) t)
+
 (* What to do with entries whose keys may already be known. *)
 let classify t (entries : Entry.t list) =
   let known =
@@ -442,6 +528,9 @@ let classify t (entries : Entry.t list) =
 
 let book_entries t entries ~event =
   let%bind.Or_error () = writable t in
+  let%bind.Or_error () =
+    forget_expired_among t (List.map entries ~f:(fun (e : Entry.t) -> e.idempotency_key))
+  in
   match classify t entries with
   | `Duplicate seq -> Ok (Append_result.Duplicate { seq })
   | `Error e -> Error e
@@ -470,6 +559,7 @@ let append_linked t entries =
    the key, so a retry gets the same answer. *)
 let book_built t ~idempotency_key ~(kind : Entry.Kind.t) built =
   let%bind.Or_error () = writable t in
+  let%bind.Or_error () = forget_expired_among t [ idempotency_key ] in
   match built, Balances.find_entry t.balances idempotency_key with
   | Error _, Some (seq, booked) when Entry.Kind.equal booked.kind kind ->
     Ok (Append_result.Duplicate { seq })
@@ -753,6 +843,7 @@ let reject_adjustment t ~idempotency_key ~checker =
 let close_day ?business_date ?snapshot_path t =
   let open Or_error.Let_syntax in
   let%bind _expired = expire_holds t in
+  let%bind _forgotten = forget_expired_refusals t in
   let business_date =
     match business_date with
     | Some d -> d

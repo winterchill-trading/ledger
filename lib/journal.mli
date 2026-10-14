@@ -61,11 +61,14 @@ end
 (** Creates a new journal file; fails if [path] exists. [time_source] (default the wall
     clock) stamps [recorded_at]; [fsync] (default [true]) syncs each append;
     [remember_refusals] (default [true]) writes a [Rejected] record for each refused
-    entry; [keep_records] (default [true]) keeps the records in memory for {!records}. *)
+    entry; [refusal_retention] (default: forever) is how long such a refusal is remembered
+    (see {!forget_expired_refusals}); [keep_records] (default [true]) keeps the records in
+    memory for {!records}. A [refusal_retention] that is not positive is an error. *)
 val create
   :  ?time_source:[> read ] Time_source.T1.t
   -> ?fsync:bool
   -> ?remember_refusals:bool
+  -> ?refusal_retention:Time_ns.Span.t
   -> ?keep_records:bool
   -> string
   -> t Or_error.t
@@ -78,6 +81,7 @@ val open_
   :  ?time_source:[> read ] Time_source.T1.t
   -> ?fsync:bool
   -> ?remember_refusals:bool
+  -> ?refusal_retention:Time_ns.Span.t
   -> ?keep_records:bool
   -> ?repair_truncated_tail:bool (** default [false] *)
   -> ?snapshot:Snapshot.t
@@ -268,6 +272,21 @@ val expire_holds_at : t -> Time_ns.t -> Append_result.t list Or_error.t
 (** [expire_holds_at t (now t)]. *)
 val expire_holds : t -> Append_result.t list Or_error.t
 
+(** {2 Refusal retention}
+
+    With [~refusal_retention:span], a remembered refusal lasts [span]: a request under its
+    key [span] or more after the refusal was recorded drops it (a [Refusals_forgotten]
+    record) and is processed as new. {!close_day} drops every refusal past the window, so
+    memory holds only the refusals of the last [span] or so. The window is the journal's
+    setting, not the file's: the records say what was forgotten and when, so replay needs
+    no setting. Refusals covered by a snapshot the journal was opened from count from that
+    snapshot's close (their exact times are not in the snapshot), so they last a little
+    longer, never shorter. *)
+
+(** Drops, in one [Refusals_forgotten] record, every refusal recorded [refusal_retention]
+    or more ago. [None] when nothing is due or the journal has no window. *)
+val forget_expired_refusals : t -> Append_result.t option Or_error.t
+
 (** {2 Adjustments (four eyes)} *)
 
 (** Records [entry] (built with any code; restamped) as a proposed correction by [maker].
@@ -299,10 +318,10 @@ val reject_adjustment
 
 (** {2 End of day} *)
 
-(** Expires due holds, appends a [Day_closed] record for [business_date] (default: the
-    current business date), writes a {!Snapshot} to [snapshot_path] (default
-    {!Snapshot.default_path}) and returns it. Later entries are booked on a later business
-    date. *)
+(** Expires due holds, drops refusals past the retention window, appends a [Day_closed]
+    record for [business_date] (default: the current business date), writes a {!Snapshot}
+    to [snapshot_path] (default {!Snapshot.default_path}) and returns it. Later entries
+    are booked on a later business date. *)
 val close_day
   :  ?business_date:Date.t
   -> ?snapshot_path:string
