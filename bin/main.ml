@@ -217,7 +217,7 @@ let verify =
 ;;
 
 (* A small journal to try the other commands on. *)
-let demo =
+let example =
   Command.basic
     ~summary:"Write a small example journal (a deposit, a card payment, a fee)"
     (let%map_open.Command path = journal_flag in
@@ -300,6 +300,6 @@ let () =
        ; "statement", statement
        ; "camt053", camt053
        ; "verify", verify
-       ; "demo", demo
+       ; "example", example
        ])
 ;;

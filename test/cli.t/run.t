@@ -1,6 +1,6 @@
 Write the example journal, then read it back.
 
-  $ ledger demo -journal j.bin
+  $ ledger example -journal j.bin
   wrote j.bin
   $ ledger trial-balance -journal j.bin
   ACCOUNT         CURRENCY                DEBIT               CREDIT
@@ -45,9 +45,9 @@ in the form to publish. A head published earlier must still be in the journal.
    (chain_head
     ledger-head-v1:8:1067:cc42d0eb7b8493b1ccbaacae881a0a0b75c17daa84d4e51476d68d78bb89d966))
 
-demo never overwrites an existing journal.
+example never overwrites an existing journal.
 
-  $ ledger demo -journal j.bin
+  $ ledger example -journal j.bin
   (Unix.Unix_error "File exists" open
    "((filename j.bin) (mode (O_WRONLY O_CREAT O_EXCL O_APPEND)) (perm 0o644))")
   [1]
