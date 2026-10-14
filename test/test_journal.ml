@@ -331,3 +331,72 @@ let%expect_test "fold streams the records and returns the balances" =
           ~same_as_replay:(Balances.equal balances (Journal.replay path |> ok_exn) : bool)];
     [%expect {| ((seqs (1 2 3 4 5 6 7 8)) (tail Clean) (same_as_replay true)) |}])
 ;;
+
+let%expect_test "a caller's timer drives hold expiry through next_expiry" =
+  with_dir (fun dir ->
+    let path = dir ^/ "j.bin" in
+    let clock = clock () in
+    let j = Journal.create ~time_source:clock ~fsync:false path |> ok_exn in
+    List.iter chart ~f:(fun a ->
+      ignore (Journal.open_account j a |> ok_exn : Journal.Append_result.t));
+    ignore
+      (Journal.transfer
+         j
+         ~idempotency_key:(key "dep-1")
+         ~effective_at:(at 0)
+         [ Posting.debit central_bank (eur "100.00")
+         ; Posting.credit alice (eur "100.00")
+         ]
+       |> ok_exn
+       : Journal.Append_result.t);
+    let place id minutes =
+      ignore
+        (Journal.hold
+           j
+           ~hold_id:(Hold_id.of_string id)
+           ~account:alice
+           ~amount:(eur "10.00")
+           ~timeout:(Time_ns.Span.of_min (Float.of_int minutes))
+           ~idempotency_key:(key id)
+           ~effective_at:(at 0)
+           ()
+         |> ok_exn
+         : Journal.Append_result.t)
+    in
+    place "auth-late" 10;
+    place "auth-early" 5;
+    let show () =
+      print_s
+        [%message
+          ""
+            ~next_expiry:(Journal.next_expiry j : Time_ns.Alternate_sexp.t option)
+            ~held:
+              (Money.Amount.to_string
+                 (Balances.held (Journal.balances j) alice Money.Currency.eur))]
+    in
+    show ();
+    (* What a timer does when it fires: expire what is due at the time it was set for. *)
+    let fire () =
+      let at = Option.value_exn (Journal.next_expiry j) in
+      Async_kernel.Time_source.advance_directly clock ~to_:at;
+      let expired = Journal.expire_holds_at j at |> ok_exn in
+      print_s
+        [%message "" ~expired:(List.map expired ~f:Journal.Append_result.seq : int list)];
+      show ();
+      at
+    in
+    let first = fire () in
+    (* A timer that fires twice for the same time books nothing the second time. *)
+    print_s [%sexp (Journal.expire_holds_at j first |> ok_exn |> List.length : int)];
+    ignore (fire () : Time_ns.t);
+    Journal.close j;
+    [%expect
+      {|
+      ((next_expiry ("2026-10-01 09:05:00.000000002Z")) (held "20.00 EUR"))
+      (expired (10))
+      ((next_expiry ("2026-10-01 09:10:00.000000001Z")) (held "10.00 EUR"))
+      0
+      (expired (11))
+      ((next_expiry ()) (held "0.00 EUR"))
+      |}])
+;;
