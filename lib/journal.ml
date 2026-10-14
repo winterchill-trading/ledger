@@ -685,9 +685,11 @@ let reverse t ~reverses ~idempotency_key ?reference ~effective_at () =
        ())
 ;;
 
-let expire_holds t =
+let next_expiry t = Balances.next_expiry t.balances
+
+let expire_holds_at t time =
   let now = now t in
-  Balances.expired_holds t.balances ~now
+  Balances.expired_holds t.balances ~now:time
   |> List.map ~f:(fun (h : Balances.Hold_state.t) ->
     let idempotency_key =
       Idempotency_key.of_string ("expire:" ^ Hold_id.to_string h.id)
@@ -705,6 +707,7 @@ let expire_holds t =
   |> Or_error.all
 ;;
 
+let expire_holds t = expire_holds_at t (now t)
 let stamp_one t entry = List.hd_exn (stamp t [ entry ])
 
 let propose_adjustment t entry ~maker ~reason ~ticket =

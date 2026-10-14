@@ -232,8 +232,38 @@ val reverse
   -> unit
   -> Append_result.t Or_error.t
 
-(** Books an expiry for every open hold whose [expires_at] has passed, under the key
-    [expire:<hold id>], in hold id order. Run it from a timer and before a close. *)
+(** {2 Hold expiry}
+
+    Nothing expires a hold by itself: an expired hold refuses captures and releases, but
+    its funds stay held until an expiry is booked. {!close_day} books the due ones;
+    between closes, a caller schedules {!expire_holds_at} for {!next_expiry} on whatever
+    timer it has. With Async, for example:
+
+    {[
+      let rec schedule journal =
+        Option.iter (Journal.next_expiry journal) ~f:(fun at ->
+          Clock_ns.run_at
+            at
+            (fun () ->
+              ignore (Journal.expire_holds_at journal at : _ Or_error.t);
+              schedule journal)
+            ())
+      ;;
+    ]}
+
+    (Reschedule after placing a hold that expires earlier than the pending timer.) *)
+
+(** The earliest expiry among the open holds, if any hold has one. *)
+val next_expiry : t -> Time_ns.t option
+
+(** Books an expiry for every open hold whose [expires_at] is at or before [time], under
+    the key [expire:<hold id>], in hold id order. Each expiry is recorded at the journal's
+    {!now}, or at the hold's [expires_at] if that is later (so a [time] ahead of the
+    journal's clock moves ledger time forward to that expiry). Already expired holds are
+    skipped, so calling it twice books nothing new. *)
+val expire_holds_at : t -> Time_ns.t -> Append_result.t list Or_error.t
+
+(** [expire_holds_at t (now t)]. *)
 val expire_holds : t -> Append_result.t list Or_error.t
 
 (** {2 Adjustments (four eyes)} *)
