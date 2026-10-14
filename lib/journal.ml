@@ -22,13 +22,14 @@ type t =
   ; mutable length : int (* bytes in the file, header included *)
   ; mutable head : string (* hash of the last frame's payload; the next frame's link *)
   ; mutable balances : Balances.t
-  ; mutable records_rev : Record.t list
+  ; mutable records_rev : Record.t list option
+      (* [None] with [~keep_records:false]: {!records} reads the file instead *)
+  ; start : int * string (* where this session's replay started: offset and link *)
   ; mutable state : [ `Open | `Failed of Error.t | `Closed ]
   }
 
 let path t = t.path
 let balances t = t.balances
-let records t = List.rev t.records_rev
 let utc_date time = Time_ns.to_date time ~zone:Time_float.Zone.utc
 
 let now t =
@@ -83,10 +84,12 @@ let make
   ?time_source
   ?(fsync = true)
   ?(remember_refusals = true)
+  ?(keep_records = true)
   ~path
   ~fd
   ~length
   ~head
+  ~start
   ~balances
   ~records_rev
   ()
@@ -104,12 +107,13 @@ let make
   ; length
   ; head
   ; balances
-  ; records_rev
+  ; records_rev = Option.some_if keep_records records_rev
+  ; start
   ; state = `Open
   }
 ;;
 
-let create ?time_source ?fsync ?remember_refusals path =
+let create ?time_source ?fsync ?remember_refusals ?keep_records path =
   Or_error.try_with_join (fun () ->
     let fd =
       Core_unix.openfile path ~mode:[ O_WRONLY; O_CREAT; O_EXCL; O_APPEND ] ~perm:0o644
@@ -125,51 +129,73 @@ let create ?time_source ?fsync ?remember_refusals path =
       ?time_source
       ?fsync
       ?remember_refusals
+      ?keep_records
       ~path
       ~fd
       ~length:(String.length header)
       ~head:Framing.genesis
+      ~start:(String.length header, Framing.genesis)
       ~balances:Balances.empty
       ~records_rev:[]
       ())
 ;;
 
-let decode ?start contents =
-  Framing.decode
+let rule_broken = Or_error.tag ~tag:"journal breaks a ledger rule"
+
+(* Streams the file once, applying every record to [init]. [f] sees each record with the
+   state after it. *)
+let fold_file ?start ?(init = Balances.empty) path ~acc ~f =
+  Framing.fold_file
     ?start
     ~accept:Record.compatible_digests
     Record.Stable.V1.bin_reader_t
-    contents
+    path
+    ~init:(init, acc)
+    ~f:(fun (balances, acc) record ->
+      let%map.Or_error balances = rule_broken (Balances.apply balances record) in
+      balances, f acc record)
 ;;
 
-let fold_records ?(init = Balances.empty) records =
-  Or_error.tag
-    (List.fold_result records ~init ~f:Balances.apply)
-    ~tag:"journal breaks a ledger rule"
+let fold path ~init ~f =
+  (let%map.Or_error (balances, acc), summary = fold_file path ~acc:init ~f in
+   acc, balances, summary.tail)
+  |> Or_error.tag_s ~tag:[%message "Journal.fold" path]
 ;;
 
 let read path =
-  Or_error.try_with_join (fun () ->
-    let%bind.Or_error decoded = decode (In_channel.read_all path) in
-    let%map.Or_error _balances = fold_records decoded.records in
-    decoded.records, decoded.tail)
+  (let%map.Or_error (_balances, records_rev), summary =
+     fold_file path ~acc:[] ~f:(fun acc r -> r :: acc)
+   in
+   List.rev records_rev, summary.tail)
   |> Or_error.tag_s ~tag:[%message "Journal.read" path]
 ;;
 
 let replay path =
-  Or_error.try_with_join (fun () ->
-    let%bind.Or_error decoded = decode (In_channel.read_all path) in
-    match decoded.tail with
-    | Corrupt _ ->
-      Or_error.error_s [%message "corrupt journal" ~tail:(decoded.tail : Framing.Tail.t)]
-    | Clean | Truncated _ -> fold_records decoded.records)
+  (let%bind.Or_error (balances, ()), summary =
+     fold_file path ~acc:() ~f:(fun () _ -> ())
+   in
+   match summary.tail with
+   | Corrupt _ ->
+     Or_error.error_s [%message "corrupt journal" ~tail:(summary.tail : Framing.Tail.t)]
+   | Clean | Truncated _ -> Ok balances)
   |> Or_error.tag_s ~tag:[%message "Journal.replay" path]
+;;
+
+(* Hex MD5 of the first [len] bytes of [path], read in blocks; [None] if it is shorter. *)
+let md5_prefix path ~len =
+  In_channel.with_file path ~binary:true ~f:(fun ic ->
+    if Int64.(In_channel.length ic < of_int len)
+    then None
+    else
+      Some
+        (Md5.to_hex (Md5.digest_channel_blocking_without_releasing_runtime_lock ic ~len)))
 ;;
 
 let open_
   ?time_source
   ?fsync
   ?remember_refusals
+  ?keep_records
   ?(repair_truncated_tail = false)
   ?snapshot
   path
@@ -179,27 +205,27 @@ let open_
     let%bind.Or_error () = lock ~path fd in
     let result =
       let open Or_error.Let_syntax in
-      let contents = In_channel.read_all path in
       let%bind start, init =
         match (snapshot : Snapshot.t option) with
         | None -> Ok (None, Balances.empty)
         | Some s ->
           (* Only the prefix check here; [Snapshot.verify] is the full replay. *)
-          let md5 =
-            if String.length contents < s.journal_length
-            then ""
-            else Md5.to_hex (Md5.digest_string (String.prefix contents s.journal_length))
-          in
-          if String.equal md5 s.journal_md5
-          then Ok (Some (s.journal_length, s.journal_head), s.state)
-          else Or_error.error_s [%message "snapshot does not match this journal"]
+          (match md5_prefix path ~len:s.journal_length with
+           | Some md5 when String.equal md5 s.journal_md5 ->
+             Ok (Some (s.journal_length, s.journal_head), s.state)
+           | Some _ | None ->
+             Or_error.error_s [%message "snapshot does not match this journal"])
       in
-      let%bind decoded = decode ?start contents in
+      let keep = Option.value keep_records ~default:true in
+      let%bind (balances, records_rev), summary =
+        fold_file ?start ~init path ~acc:[] ~f:(fun acc r ->
+          if keep then r :: acc else acc)
+      in
       let%bind () =
-        match decoded.tail with
+        match summary.tail with
         | Clean -> Ok ()
         | Truncated _ when repair_truncated_tail ->
-          Core_unix.ftruncate fd ~len:(Int64.of_int decoded.valid_length);
+          Core_unix.ftruncate fd ~len:(Int64.of_int summary.valid_length);
           Core_unix.fsync fd;
           Ok ()
         | Truncated _ ->
@@ -207,27 +233,48 @@ let open_
             [%message
               "journal ends in a partial record (a crash during an append); reopen with \
                repair_truncated_tail to cut it off"
-                ~tail:(decoded.tail : Framing.Tail.t)]
+                ~tail:(summary.tail : Framing.Tail.t)]
         | Corrupt _ ->
           Or_error.error_s
-            [%message "corrupt journal" ~tail:(decoded.tail : Framing.Tail.t)]
+            [%message "corrupt journal" ~tail:(summary.tail : Framing.Tail.t)]
       in
-      let%map balances = fold_records ~init decoded.records in
-      make
-        ?time_source
-        ?fsync
-        ?remember_refusals
-        ~path
-        ~fd
-        ~length:decoded.valid_length
-        ~head:decoded.head
-        ~balances
-        ~records_rev:(List.rev decoded.records)
-        ()
+      return
+        (make
+           ?time_source
+           ?fsync
+           ?remember_refusals
+           ?keep_records
+           ~path
+           ~fd
+           ~length:summary.valid_length
+           ~head:summary.head
+           ~start:(Option.value start ~default:(Framing.header_length, Framing.genesis))
+           ~balances
+           ~records_rev
+           ())
     in
     if Result.is_error result then Core_unix.close fd;
     result)
   |> Or_error.tag_s ~tag:[%message "Journal.open_" path]
+;;
+
+let records t =
+  match t.records_rev with
+  | Some records_rev -> List.rev records_rev
+  | None ->
+    (* Only frames this journal wrote or checked on open: up to [t.length]. *)
+    let records_rev, _ =
+      Framing.fold_file
+        ~start:t.start
+        ~accept:Record.compatible_digests
+        Record.Stable.V1.bin_reader_t
+        t.path
+        ~init:[]
+        ~f:(fun acc (r : Record.t) ->
+          if r.seq < Balances.next_seq t.balances then Ok (r :: acc) else Ok acc)
+      |> Or_error.ok_exn
+    in
+    List.rev records_rev
 ;;
 
 let writable t =
@@ -255,7 +302,7 @@ let write_event t (event : Record.Event.t) =
     t.balances <- balances;
     t.length <- t.length + String.length frame;
     t.head <- hash;
-    t.records_rev <- record :: t.records_rev;
+    Option.iter t.records_rev ~f:(fun rs -> t.records_rev <- Some (record :: rs));
     Ok record
   | exception exn ->
     let error = Error.of_exn exn in
@@ -271,13 +318,30 @@ let open_account t (account : Account.t) =
   let%bind.Or_error () = writable t in
   match Balances.find_account t.balances account.id with
   | Some existing when Account.equal existing account ->
-    let seq =
-      List.find_map_exn t.records_rev ~f:(fun r ->
-        match r.event with
-        | Account_opened a when Account_id.equal a.id account.id -> Some r.seq
-        | _ -> None)
+    let opened_by (r : Record.t) =
+      match r.event with
+      | Account_opened a when Account_id.equal a.id account.id -> Some r.seq
+      | _ -> None
     in
-    Ok (Append_result.Duplicate { seq })
+    (* The record may be older than what is in memory (a snapshot covers it, or records
+       are not kept): then look for it in the file, a rare path. *)
+    let%map.Or_error seq =
+      match Option.bind t.records_rev ~f:(List.find_map ~f:opened_by) with
+      | Some seq -> Ok seq
+      | None ->
+        let%bind.Or_error found, _ =
+          Framing.fold_file
+            ~accept:Record.compatible_digests
+            Record.Stable.V1.bin_reader_t
+            t.path
+            ~init:None
+            ~f:(fun found r -> Ok (Option.first_some found (opened_by r)))
+        in
+        Result.of_option
+          found
+          ~error:(Error.of_string "account is open but its opening record is missing")
+    in
+    Append_result.Duplicate { seq }
   | Some _ | None -> append_event t (Account_opened account)
 ;;
 
@@ -671,9 +735,7 @@ let close_day ?business_date ?snapshot_path t =
     { business_date
     ; seq = record.seq
     ; journal_length = t.length
-    ; journal_md5 =
-        Md5.to_hex
-          (Md5.digest_string (String.prefix (In_channel.read_all t.path) t.length))
+    ; journal_md5 = Option.value_exn (md5_prefix t.path ~len:t.length)
     ; journal_head = t.head
     ; rows = Balances.last_close_rows t.balances
     ; state = t.balances

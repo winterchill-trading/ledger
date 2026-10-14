@@ -34,7 +34,13 @@
     is set, in which case it is cut off. If a write fails half way the journal refuses
     further appends; close it and reopen.
 
-    The journal is read into memory on open; snapshots save the fold, not the read. *)
+    {2 Memory}
+
+    Opening streams the file one frame at a time ({!Framing.fold}); what stays in memory
+    is the folded {!Balances.t} (which holds every booked entry, for idempotency) and, by
+    default, the list of records for {!records}. With [~keep_records:false] the list is
+    not kept and {!records} reads the file again when called. {!fold}, {!replay} and the
+    statement-style readers never hold the whole file. *)
 
 open! Core
 module Time_source = Async_kernel.Time_source
@@ -53,21 +59,24 @@ end
 (** Creates a new journal file; fails if [path] exists. [time_source] (default the wall
     clock) stamps [recorded_at]; [fsync] (default [true]) syncs each append;
     [remember_refusals] (default [true]) writes a [Rejected] record for each refused
-    entry. *)
+    entry; [keep_records] (default [true]) keeps the records in memory for {!records}. *)
 val create
   :  ?time_source:[> read ] Time_source.T1.t
   -> ?fsync:bool
   -> ?remember_refusals:bool
+  -> ?keep_records:bool
   -> string
   -> t Or_error.t
 
 (** Opens an existing journal for appending. With [snapshot], the state is taken from the
     snapshot (after checking that the journal starts with the bytes it covers) and only
-    the records after it are replayed. *)
+    the records after it are replayed. The file is read frame by frame; see {e Memory}
+    above for [keep_records]. *)
 val open_
   :  ?time_source:[> read ] Time_source.T1.t
   -> ?fsync:bool
   -> ?remember_refusals:bool
+  -> ?keep_records:bool
   -> ?repair_truncated_tail:bool (** default [false] *)
   -> ?snapshot:Snapshot.t
   -> string
@@ -80,7 +89,8 @@ val path : t -> string
 val balances : t -> Balances.t
 
 (** Records in sequence order: all of them, or those after the snapshot the journal was
-    opened from. *)
+    opened from. With [~keep_records:false] this reads them from the file on each call,
+    and raises if the file cannot be read back (it was damaged after opening). *)
 val records : t -> Record.t list
 
 (** The time the next record would be stamped with: the clock, or just after the last
@@ -263,8 +273,20 @@ val close_day
 
 (** {2 Reading without a lock} *)
 
+(** Folds [f] over the records of a journal file in sequence order, reading one frame at a
+    time, and returns the result, the balances they fold to and what follows the last
+    intact frame. Fails like {!read}. Memory is the state, not the file: use it for
+    reports over large journals (filter the records one statement needs, then call
+    {!Statement.create} on those). *)
+val fold
+  :  string
+  -> init:'acc
+  -> f:('acc -> Record.t -> 'acc)
+  -> ('acc * Balances.t * Framing.Tail.t) Or_error.t
+
 (** The records of a journal file and what follows the last intact frame. Fails on a bad
-    header or a record that breaks a ledger rule. *)
+    header or a record that breaks a ledger rule. Holds every record in memory; see
+    {!fold} for a large file. *)
 val read : string -> (Record.t list * Framing.Tail.t) Or_error.t
 
 (** Folds a journal file to its balances. Fails like {!read}, and on a corrupt (but not a
