@@ -1,0 +1,7 @@
+; Built in CI so the examples in the documentation keep compiling. Not installed.
+
+(executable
+ (name quickstart)
+ (libraries core core_unix.filename_unix money ledger)
+ (preprocess
+  (pps ppx_jane)))
