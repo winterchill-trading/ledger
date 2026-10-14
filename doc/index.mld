@@ -1,0 +1,76 @@
+{0 ledger}
+
+A double-entry ledger: balanced entries in exact integer minor units, two-phase holds,
+reversals, four-eyes adjustments, idempotency keys and business-day closes, stored in an
+append-only, checksummed and hash-chained Bin_prot journal.
+
+{1 Where to start}
+
+- {!Ledger.Journal}: create or open a journal file and book entries through it. It
+  assigns timestamps and business dates, enforces idempotency and writes each record
+  durably before returning.
+- {!Ledger.Balances}: the state a journal folds to and every rule, in one pure
+  [apply].
+- {!Ledger.Hold}, {!Ledger.Reversal}: builders for two-phase transfers and reversals.
+- {!Ledger.Trial_balance}, {!Ledger.Statement}, {!Ledger.Camt053},
+  {!Ledger.Safeguarding}, {!Ledger.Clearing}: reports.
+- {!Ledger.Framing}, {!Ledger.Record}, {!Ledger.Snapshot}, {!Ledger.Chain_head}: the file
+  format, end-of-day snapshots and the head to publish for external anchoring.
+
+{1 Example}
+
+The same program is [examples/quickstart.ml] in the repository, built and run in CI.
+
+{[
+  open! Core
+  open Ledger
+
+  let eur s = Money.Amount.of_decimal_string Money.Currency.eur s |> Or_error.ok_exn
+  let id = Account_id.of_string
+  let key = Idempotency_key.of_string
+
+  let () =
+    let j = Journal.create "bank.journal" |> Or_error.ok_exn in
+    let book r = ignore (Or_error.ok_exn r : Journal.Append_result.t) in
+    book (Journal.open_account j (Account.create (id "bank:central") Asset));
+    book
+      (Journal.open_account
+         j
+         (Account.create (id "external:cards") Asset ~allow_negative:true));
+    book (Journal.open_account j (Account.create (id "customer:alice") Liability));
+    (* A deposit, booked once even if the event that reports it arrives twice. *)
+    book
+      (Journal.transfer
+         j
+         ~idempotency_key:(key "provider-event-123")
+         ~tag:"deposit"
+         ~effective_at:(Journal.now j)
+         [ Posting.debit (id "bank:central") (eur "100.00")
+         ; Posting.credit (id "customer:alice") (eur "100.00")
+         ]);
+    (* A card authorisation reserves funds; the settlement captures them. *)
+    let auth = Hold_id.of_string "auth-9f2" in
+    book
+      (Journal.hold
+         j
+         ~hold_id:auth
+         ~account:(id "customer:alice")
+         ~amount:(eur "12.00")
+         ~idempotency_key:(key "auth-9f2")
+         ~effective_at:(Journal.now j)
+         ());
+    book
+      (Journal.capture
+         j
+         ~hold_id:auth
+         ~to_:(id "external:cards")
+         ~idempotency_key:(key "settle-9f2")
+         ~effective_at:(Journal.now j)
+         ());
+    Trial_balance.of_balances (Journal.balances j)
+    |> Trial_balance.check
+    |> Or_error.ok_exn;
+    print_endline (Chain_head.to_string (Journal.chain_head j));
+    Journal.close j
+  ;;
+]}
