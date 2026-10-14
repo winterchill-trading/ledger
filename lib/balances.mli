@@ -113,6 +113,9 @@ val open_holds : t -> Hold_state.t list
 (** Open holds whose [expires_at] is at or before [now]. *)
 val expired_holds : t -> now:Time_ns.t -> Hold_state.t list
 
+(** The earliest [expires_at] of the open holds: when {!expired_holds} next grows. *)
+val next_expiry : t -> Time_ns.t option
+
 (** {2 Entries and keys} *)
 
 (** The entry booked under this key and the sequence number of its record. *)

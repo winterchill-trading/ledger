@@ -258,6 +258,11 @@ let is_expired (h : Hold_state.t) ~now =
 
 let expired_holds t ~now = List.filter (open_holds t) ~f:(is_expired ~now)
 
+let next_expiry t =
+  List.filter_map (open_holds t) ~f:(fun h -> h.expires_at)
+  |> List.min_elt ~compare:Time_ns.compare
+;;
+
 let find_entry t key =
   match Map.find t.keys key with
   | Some (Booked { seq; entry }) -> Some (seq, entry)
