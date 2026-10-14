@@ -8,6 +8,8 @@
   expect_test_helpers_core
   ledger)
  (inline_tests
+  (deps
+   (glob_files data/*.journal))
   (flags
    (:standard -source-tree-root .)))
  (preprocess
