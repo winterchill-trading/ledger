@@ -1,9 +1,11 @@
 # ledger
 
-A double-entry ledger in OCaml: balanced journal entries, holds, reversals, trial
-balance and account statements, stored in an append-only, checksummed Bin_prot journal.
-Built for a bank or a banking demo, and meant to be usable later by an exchange
-clearinghouse.
+A double-entry ledger in OCaml: balanced journal entries, two-phase holds, reversals,
+four-eyes adjustments, trial balance and account statements, stored in an append-only,
+checksummed and hash-chained Bin_prot journal. It suits anything that moves money on
+behalf of others and must answer "what does this account hold, and did this event
+already get booked": a payment or e-money institution, a card processor, a wallet, the
+clearing side of an exchange.
 
 Amounts come from [`money`](https://github.com/winterchill-trading/money): exact integer
 minor units per currency (EUR 2 decimals, BTC 8, ETH 18 without truncation). There are
@@ -22,9 +24,10 @@ accounts, postings and idempotency keys.
 
 ```sh
 dune build
-dune exec ledger -- demo -journal /tmp/demo.bin
-dune exec ledger -- trial-balance -journal /tmp/demo.bin
-dune exec ledger -- statement -journal /tmp/demo.bin -account customer:alice -currency EUR
+dune exec ledger -- example -journal /tmp/example.bin
+dune exec ledger -- trial-balance -journal /tmp/example.bin
+dune exec ledger -- statement -journal /tmp/example.bin -account customer:alice -currency EUR
+dune exec ./examples/quickstart.exe
 ```
 
 ```
@@ -38,7 +41,10 @@ TOTAL           EUR                    250.00               250.00
 
 `statement` also takes `-from`, `-until` (UTC date or time, on `effective_at`),
 `-after SEQ` and `-limit N` for paging. `trial-balance` exits 2 if the books do not
-balance, and both commands warn on stderr when the journal does not end cleanly.
+balance, and both commands warn on stderr when the journal does not end cleanly. Both
+read the journal one frame at a time. `verify` checks a whole journal and prints its
+chain head; `verify -head ledger-head-v1:...` checks that a head published earlier is
+still in the file.
 
 ## Usage
 
@@ -98,6 +104,7 @@ let () =
 | `Clearing` | clearing accounts that did not return to zero, with age in business days |
 | `Safeguarding` | per-currency requirement vs. safeguarded assets vs. external statement; exposure |
 | `Record`, `Framing`, `Journal` | the durable, sequenced, checksummed, hash-chained file |
+| `Chain_head` | the head of the hash chain as one line of text, to publish and verify later |
 | `Snapshot` | end-of-day state and balance rows, tied to the journal bytes and chain head it covers |
 
 ### Rules (enforced by `Balances.apply`, so they hold after any accepted sequence)
@@ -113,14 +120,18 @@ let () =
 - An idempotency key is used once, forever. A retry with the same content is
   `Duplicate { seq }`; different content is an error; an entry the rules refused is
   stored as a `Rejected` record and a retry gets the same refusal even if the state has
-  changed (use a new key for a new attempt).
+  changed (use a new key for a new attempt). That includes refusals by the builders
+  before an entry exists (an unknown hold id). With `~refusal_retention:span` a refusal
+  lasts `span`; after that a request under the key is new again, and `close_day` drops
+  every refusal past the window (a `Refusals_forgotten` record, so replay agrees).
 - `Linked` entries (an FX swap's two legs and its fee) book together or not at all.
 - Corrections are never edits: transfers are reversed (once, by key), holds are
   released, and manual fixes are `Adjustment`s that a second operator approves within
   24 hours (`Journal.propose_adjustment` / `approve_adjustment`). The `Adjustment` code
   is refused anywhere else.
 - Holds may expire (`~timeout`); an expired hold cannot be captured or released, and
-  `Journal.expire_holds` returns the rest. Captures can be partial and repeated, split
+  `Journal.expire_holds_at` returns the rest. `Journal.next_expiry` says when to call it
+  next, so a caller can drive expiry from any timer (`close_day` also does it). Captures can be partial and repeated, split
   between payees, release the remainder in the same entry, or exceed the hold with a
   reason (`over_capture`, the excess posted from the account).
 - The ledger assigns `recorded_at` (strictly increasing, even if the clock steps back)
@@ -166,8 +177,16 @@ frame* : length (8 bytes LE) ++ complemented length (8) ++ MD5 of payload (16)
 - The complemented length makes a damaged length header in the middle read as
   corruption, never as a truncated tail that a repair would cut.
 - The SHA-256 links make the file a hash chain: rewriting any frame, even with a correct
-  MD5, breaks the next link. The head hash (`ledger verify`, and every snapshot) is the
-  value to keep outside the system to cover the last frame too.
+  MD5, breaks the next link. `Journal.chain_head` (also `ledger verify` and every
+  snapshot, `Chain_head.of_snapshot`) is the value to keep outside the system:
+  `Chain_head.to_string` is one line (`ledger-head-v1:<seq>:<length>:<sha256>`) to send
+  to an auditor, a transparency log or a timestamping service, and
+  `Chain_head.verify` fails if records up to that head were cut off or rewritten.
+- Opening reads the file one frame at a time (`Framing.fold`), so memory is the folded
+  state, not the file. The state keeps every booked entry (for idempotency), and by
+  default the journal also keeps the list of records for `Journal.records`;
+  `~keep_records:false` drops it and `records` reads the file again. `Journal.fold`
+  streams a file for reports.
 - Readers accept the digests in `Record.compatible_digests` (append-only, pinned in a
   test); see `record.mli` for how to change a record type.
 
@@ -211,17 +230,39 @@ properties:
   replaying, reopening and reopening from the last snapshot all reproduce the live
   state exactly, and every snapshot verifies.
 
+## Portability
+
+The library uses no OxCaml-only language feature (no modes, unboxed types, `or_null`,
+`[@zero_alloc]` or stack allocation), so its own code builds with OCaml 5.2 or later.
+It depends on Jane Street's `v0.18~preview` packages (`core`, `core_unix`,
+`async_kernel`, `ppx_jane`), which today are published only in the OxCaml opam
+repository, and on `money`, whose `fixed-decimal` dependency needs the OxCaml compiler.
+A plain OCaml build needs released `v0.17` Jane Street packages (untested) and a
+`fixed-decimal` built without its `[@zero_alloc]` checks.
+
+## Releasing
+
+The version lives only in git tags, written into `ledger.opam` by `dune subst` at
+release time; `CHANGES.md` collects the notes under `## Unreleased`. A release is the
+`dune-release` flow: move the `Unreleased` notes under the new version, then
+`dune-release tag`, `dune-release distrib`, `dune-release publish` and
+`dune-release opam pkg`/`submit`. `money` (and `fixed-decimal`) must be released first.
+Nothing has been released yet.
+
 ## Known gaps
 
-- The journal is read into memory on open; snapshots save the fold, not the read. Years
-  of a real bank would want segment files per period.
 - `fsync` on macOS does not force the drive cache (`F_FULLFSYNC`); Linux `fsync` does.
-- Hold expiry needs someone to call `Journal.expire_holds` (a timer, and `close_day`
-  does it); between expiry and the sweep the funds stay held but cannot be captured.
-- Refused keys are kept forever (the research note leaves a retention window open).
-- Errors raised before an entry exists (a builder given an unknown hold id) are not
-  recorded as refusals.
-- Reconciliation breaks against provider statements (matching, ageing, resolution) are
-  not here yet; `Clearing` and `Safeguarding` give the ledger side.
-- Only the last frame relies on an external anchor for tamper evidence; nothing yet
-  publishes the head hash anywhere.
+- The folded state keeps every booked entry, because idempotency needs them; memory grows
+  with the number of entries (not with the file, which is no longer read whole). A bank
+  running for years would want segment files per period with the key index on disk; that
+  is a format decision, not a bounded change.
+- Matching against provider statements (breaks, ageing, resolution) is not here;
+  `Clearing` and `Safeguarding` give the ledger side. How breaks are matched and
+  resolved needs its own design.
+- `ledger camt053` still reads every record into memory, since the statement replays the
+  whole journal for its balances.
+
+## Used by
+
+`payments-core`, `card-core`, `banking-provider` and `neobank-api` in the same
+organization.
