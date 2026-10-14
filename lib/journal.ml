@@ -359,23 +359,39 @@ let set_status t account status =
 
 (* Refusals by [Balances.apply] are remembered under each key (see the .mli). Writing the
    refusal can itself fail (the journal was closed); the original error wins. *)
-let remember_refusal t (entries : Entry.t list) error =
+let remember_refusal_of_keys t keys error =
   if t.remember_refusals
   then
-    List.iter entries ~f:(fun e ->
-      if Option.is_none (Balances.find_idempotency_key t.balances e.idempotency_key)
-         && Option.is_none (Balances.find_rejection t.balances e.idempotency_key)
+    List.iter keys ~f:(fun idempotency_key ->
+      if Option.is_none (Balances.find_idempotency_key t.balances idempotency_key)
+         && Option.is_none (Balances.find_rejection t.balances idempotency_key)
       then
         ignore
           (write_event
              t
              (Rejected
-                { idempotency_key = e.idempotency_key
+                { idempotency_key
                 ; reason = Error.to_string_mach error
                 ; recorded_at = now t
                 })
            : Record.t Or_error.t));
   Error error
+;;
+
+let remember_refusal t (entries : Entry.t list) error =
+  remember_refusal_of_keys
+    t
+    (List.map entries ~f:(fun (e : Entry.t) -> e.idempotency_key))
+    error
+;;
+
+let already_refused ~idempotency_key ~refused_at ~reason =
+  Error.create_s
+    [%message
+      "idempotency key already refused"
+        (idempotency_key : Idempotency_key.t)
+        (refused_at : int)
+        reason]
 ;;
 
 let stamp t (entries : Entry.t list) =
@@ -403,13 +419,7 @@ let classify t (entries : Entry.t list) =
   match known with
   | [] -> `New
   | `Refused (refused_at, reason, e) :: _ ->
-    `Error
-      (Error.create_s
-         [%message
-           "idempotency key already refused"
-             ~idempotency_key:(e.idempotency_key : Idempotency_key.t)
-             (refused_at : int)
-             reason])
+    `Error (already_refused ~idempotency_key:e.idempotency_key ~refused_at ~reason)
   | `Booked (seq, _, _) :: _ ->
     let same =
       List.length known = List.length entries
@@ -455,13 +465,20 @@ let append_linked t entries =
 ;;
 
 (* A builder that fails because the hold was resolved by the first attempt of this very
-   request is a retry, not an error. *)
+   request is a retry, not an error. Any other builder failure (an unknown or expired
+   hold, a malformed entry) is a refusal like those of [Balances.apply]: remembered under
+   the key, so a retry gets the same answer. *)
 let book_built t ~idempotency_key ~(kind : Entry.Kind.t) built =
   let%bind.Or_error () = writable t in
   match built, Balances.find_entry t.balances idempotency_key with
   | Error _, Some (seq, booked) when Entry.Kind.equal booked.kind kind ->
     Ok (Append_result.Duplicate { seq })
-  | Error e, _ -> Error e
+  | Error e, Some _ -> Error e
+  | Error e, None ->
+    (match Balances.find_rejection t.balances idempotency_key with
+     | Some (refused_at, reason) ->
+       Error (already_refused ~idempotency_key ~refused_at ~reason)
+     | None -> remember_refusal_of_keys t [ idempotency_key ] e)
   | Ok entry, _ -> append_entry t entry
 ;;
 

@@ -21,9 +21,11 @@
     a key for different content is an error. An entry that {!Balances.apply} refuses
     (insufficient funds, frozen account, expired hold, ...) is remembered with a
     [Rejected] record, so a retry under the same key gets the same refusal even if the
-    state has changed since; a caller that wants a new attempt uses a new key. Errors that
-    happen before an entry exists (a malformed entry, an unknown hold id passed to a
-    builder) are not recorded.
+    state has changed since; a caller that wants a new attempt uses a new key. The same
+    holds for errors that happen before an entry exists, in the builders ({!transfer},
+    {!hold}, {!capture}, ...): a malformed entry or an unknown hold id is remembered too.
+    Errors in arguments to {!append_entry} and {!append_linked} that are not ledger
+    refusals (an empty group, a key reused for different content) are not recorded.
 
     {2 Opening}
 
