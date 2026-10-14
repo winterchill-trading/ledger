@@ -400,3 +400,59 @@ let%expect_test "a caller's timer drives hold expiry through next_expiry" =
       ((next_expiry ()) (held "0.00 EUR"))
       |}])
 ;;
+
+let%expect_test "a builder's refusal is remembered under its key" =
+  with_dir (fun dir ->
+    let run ~remember_refusals =
+      let path = dir ^/ sprintf "j-%b.bin" remember_refusals in
+      let j =
+        Journal.create ~time_source:(clock ()) ~fsync:false ~remember_refusals path
+        |> ok_exn
+      in
+      populate j;
+      let capture_unknown () =
+        Journal.capture
+          j
+          ~hold_id:(Hold_id.of_string "auth-404")
+          ~to_:card_scheme
+          ~idempotency_key:(key "cap-404")
+          ~effective_at:(at 2)
+          ()
+      in
+      print_error (capture_unknown ());
+      (match (List.last_exn (Journal.records j)).event with
+       | Rejected { idempotency_key; reason; _ } ->
+         print_s [%message "recorded" (idempotency_key : Idempotency_key.t) reason]
+       | _ -> print_endline "not recorded");
+      (* The hold turns up later; the retry under the same key still gets the refusal when
+         refusals are remembered. *)
+      ignore
+        (Journal.hold
+           j
+           ~hold_id:(Hold_id.of_string "auth-404")
+           ~account:alice
+           ~amount:(eur "5.00")
+           ~idempotency_key:(key "auth-404")
+           ~effective_at:(at 2)
+           ()
+         |> ok_exn
+         : Journal.Append_result.t);
+      print_error (capture_unknown ());
+      Journal.close j
+    in
+    run ~remember_refusals:true;
+    [%expect
+      {|
+      ("unknown hold" (hold_id auth-404))
+      (recorded (idempotency_key cap-404) "(\"unknown hold\"(hold_id auth-404))")
+      ("idempotency key already refused" (idempotency_key cap-404) (refused_at 9)
+       "(\"unknown hold\"(hold_id auth-404))")
+      |}];
+    run ~remember_refusals:false;
+    [%expect
+      {|
+      ("unknown hold" (hold_id auth-404))
+      not recorded
+      ok
+      |}])
+;;
