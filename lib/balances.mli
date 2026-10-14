@@ -9,7 +9,8 @@
       flags [debits_must_not_exceed_credits] / [credits_must_not_exceed_debits], checked
       against posted plus pending);
     - the balance of every pending sub-account equals the sum of its open holds;
-    - each idempotency key is booked or refused once, and a refused key stays refused;
+    - each idempotency key is booked or refused once, and a refused key stays refused
+      until a [Refusals_forgotten] record drops the refusal (a retention window);
     - each entry is reversed at most once; each hold is captured, released or expired
       until nothing remains, and never after it expired;
     - [recorded_at] and [business_date] never go backwards, and nothing is booked on a
@@ -126,6 +127,11 @@ val find_idempotency_key : t -> Idempotency_key.t -> int option
 
 (** Why an entry under this key was refused, and the sequence number of the refusal. *)
 val find_rejection : t -> Idempotency_key.t -> (int * string) option
+
+(** Keys of the entries refused and remembered ([Rejected] records not yet forgotten by a
+    [Refusals_forgotten] record), with the sequence number of the refusal, sorted by key.
+    Rejected adjustment proposals are not included. *)
+val refusals : t -> (Idempotency_key.t * int) list
 
 (** Key of the reversal of the entry booked under this key. *)
 val reversed_by : t -> Idempotency_key.t -> Idempotency_key.t option

@@ -777,6 +777,34 @@ let reject t ~seq ~idempotency_key ~reason ~recorded_at =
       }
 ;;
 
+(* Only refusals of entries: a rejected adjustment stays, its proposal records it. *)
+let forget_refusals t ~idempotency_keys ~recorded_at =
+  let open Or_error.Let_syntax in
+  let%bind () = check_time t ~recorded_at in
+  let%bind () =
+    match idempotency_keys with
+    | [] -> fail [%message "no refusals to forget"]
+    | _ -> Ok ()
+  in
+  let%map keys =
+    List.fold_result idempotency_keys ~init:t.keys ~f:(fun keys key ->
+      match Map.find keys key with
+      | Some (Rejected _) when not (Map.mem t.proposals key) -> Ok (Map.remove keys key)
+      | Some _ | None ->
+        fail
+          [%message "not a remembered refusal" ~idempotency_key:(key : Idempotency_key.t)])
+  in
+  { t with keys; last_recorded_at = Some recorded_at }
+;;
+
+let refusals t =
+  Map.fold t.keys ~init:[] ~f:(fun ~key ~data acc ->
+    match data with
+    | Rejected { seq; reason = _ } when not (Map.mem t.proposals key) -> (key, seq) :: acc
+    | Rejected _ | Booked _ -> acc)
+  |> List.rev
+;;
+
 let close_day t ~business_date ~recorded_at =
   let open Or_error.Let_syntax in
   let%bind () = check_time t ~recorded_at in
@@ -934,6 +962,8 @@ let apply t ({ seq; event } : Record.t) =
       | Adjustment_approved entry -> approve t ~seq entry
       | Adjustment_rejected { idempotency_key; checker; recorded_at } ->
         reject_proposal t ~seq ~idempotency_key ~checker ~recorded_at
+      | Refusals_forgotten { idempotency_keys; recorded_at } ->
+        forget_refusals t ~idempotency_keys ~recorded_at
     in
     { t with next_seq = seq + 1 })
 ;;

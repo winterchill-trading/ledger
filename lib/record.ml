@@ -33,6 +33,10 @@ module Stable = struct
             ; checker : string
             ; recorded_at : Time_ns.Stable.Alternate_sexp.V1.t
             }
+        | Refusals_forgotten of
+            { idempotency_keys : Idempotency_key.Stable.V1.t list
+            ; recorded_at : Time_ns.Stable.Alternate_sexp.V1.t
+            }
       [@@deriving bin_io, sexp, compare, equal]
     end
 
@@ -57,6 +61,7 @@ module Event = struct
     | Adjustment_proposed { entry; _ } -> entry.recorded_at
     | Account_status_changed { recorded_at; _ }
     | Adjustment_rejected { recorded_at; _ }
+    | Refusals_forgotten { recorded_at; _ }
     | Rejected { recorded_at; _ }
     | Day_closed { recorded_at; _ } -> recorded_at
   ;;
@@ -77,7 +82,8 @@ let entries t =
   | Rejected _
   | Day_closed _
   | Adjustment_proposed _
-  | Adjustment_rejected _ -> []
+  | Adjustment_rejected _
+  | Refusals_forgotten _ -> []
 ;;
 
 let digest = Bin_prot.Shape.eval_to_digest_string Stable.V1.bin_shape_t
@@ -86,7 +92,10 @@ let digest = Bin_prot.Shape.eval_to_digest_string Stable.V1.bin_shape_t
    and the pinned test in test_journal.ml fails until the change is classified (see the
    .mli). *)
 let compatible_digests =
-  [ (* V1, 2026-10-13: accounts and status, entries (single and linked) with holds,
+  [ (* 2026-10-14: [Refusals_forgotten] added at the end of [Event.t]; older journals
+       decode unchanged. *)
+    "f4c7efda3497075ac22d7f8da6eb8ae7"
+  ; (* V1, 2026-10-13: accounts and status, entries (single and linked) with holds,
        increments, expiry and reversals, rejections, adjustments, day close. Set before
        any journal outside tests was written; the pre-release shape
        3d66d278d2cb87148044dbc25f542224 is deliberately not accepted. *)

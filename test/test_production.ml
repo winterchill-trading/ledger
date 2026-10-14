@@ -513,8 +513,8 @@ let%expect_test "day close writes a snapshot that replay reproduces" =
     ((same_as_live true) (records_replayed 1))
     ((Snapshot.verify $DIR/j.bin)
      ("journal prefix does not match the snapshot"
-      (expected 0631f4ca7e55f88d7be9428a816f7333)
-      (found db807ac7390b4f3a1daf9b4a8c73c2c7)))
+      (expected f5c3df9c2f86ca862db732c31098458e)
+      (found 32723ad0f91e11ef55c27fc4ebb5cc5a)))
     ((Journal.open_ $DIR/j.bin) "snapshot does not match this journal")
     ((Journal.open_ $DIR/j.bin)
      ("corrupt journal"

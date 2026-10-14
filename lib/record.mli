@@ -41,6 +41,13 @@ module Event : sig
         ; checker : string
         ; recorded_at : Time_ns.Alternate_sexp.t
         }
+    | Refusals_forgotten of
+        { idempotency_keys : Idempotency_key.t list
+        ; recorded_at : Time_ns.Alternate_sexp.t
+        }
+    (** refusals older than the journal's retention window, dropped: a request under one
+        of these keys is processed again as new (see [refusal_retention] in
+        {!Journal.create}) *)
   [@@deriving sexp_of, compare, equal]
 
   (** The ledger timestamp of the event (of the last entry for [Linked]). *)
@@ -68,8 +75,8 @@ val digest : string
 
 (** Digests whose journals this code reads, newest first; the head is {!digest}.
 
-    Append-only, as in market-data's event log: a change to any type inside a record must
-    keep old bytes decoding the same (add variant constructors at the end only), add its
-    new digest at the head with a comment, and check in a journal written by the old code
-    with a test that reads it. An incompatible change needs [Stable.V2]. *)
+    Append-only: a change to any type inside a record must keep old bytes decoding the
+    same (add variant constructors at the end only), add its new digest at the head with a
+    comment, and check in a journal written by the old code with a test that reads it. An
+    incompatible change needs [Stable.V2]. *)
 val compatible_digests : string list

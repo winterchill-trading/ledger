@@ -54,8 +54,8 @@ let%expect_test "the record digest is pinned" =
   assert (List.mem Record.compatible_digests Record.digest ~equal:String.equal);
   [%expect
     {|
-    132f0e078ccf2b8aa2dafa81b3ab9d9b
-    (132f0e078ccf2b8aa2dafa81b3ab9d9b)
+    f4c7efda3497075ac22d7f8da6eb8ae7
+    (f4c7efda3497075ac22d7f8da6eb8ae7 132f0e078ccf2b8aa2dafa81b3ab9d9b)
     |}]
 ;;
 
@@ -241,7 +241,8 @@ let%expect_test "a journal from another record type is refused" =
     ((Journal.open_ $DIR/j.bin)
      ("journal written with a record type this reader does not know"
       (digest 00000000000000000000000000000000)
-      (accept (132f0e078ccf2b8aa2dafa81b3ab9d9b))))
+      (accept
+       (f4c7efda3497075ac22d7f8da6eb8ae7 132f0e078ccf2b8aa2dafa81b3ab9d9b))))
     |}]
 ;;
 
