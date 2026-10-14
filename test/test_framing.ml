@@ -128,3 +128,57 @@ let%test_unit "decode inverts encode" =
       [%test_result: string list] decoded.records ~expect:values;
       [%test_result: int] decoded.valid_length ~expect:(String.length contents))
 ;;
+
+(* The streaming reader must see exactly what the in-memory decoder sees, on every prefix
+   of a file and with every single byte damaged. *)
+let%expect_test "fold_file agrees with decode on every truncation and every flipped byte" =
+  let dir = Filename_unix.temp_dir "ledger" "framing" in
+  let path = dir ^/ "f" in
+  let contents = file [ "one"; "two"; "three" ] in
+  let agree contents =
+    Out_channel.write_all path ~data:contents;
+    let decoded = Framing.decode ~accept:[ digest ] String.bin_reader_t contents in
+    let folded =
+      Framing.fold_file
+        ~accept:[ digest ]
+        String.bin_reader_t
+        path
+        ~init:[]
+        ~f:(fun acc v -> Ok (v :: acc))
+    in
+    match decoded, folded with
+    | Error _, Error _ -> true
+    | Ok d, Ok (rev, s) ->
+      [%equal: string list] d.records (List.rev rev)
+      && d.valid_length = s.valid_length
+      && String.equal d.head s.head
+      && Framing.Tail.equal d.tail s.tail
+    | Ok _, Error _ | Error _, Ok _ -> false
+  in
+  let n = String.length contents in
+  let prefixes = List.init (n + 1) ~f:(fun len -> String.prefix contents len) in
+  let flipped =
+    List.init n ~f:(fun pos ->
+      let b = Bytes.of_string contents in
+      Bytes.set b pos (Char.of_int_exn (Char.to_int (Bytes.get b pos) lxor 0x10));
+      Bytes.to_string b)
+  in
+  let disagreements = List.count (prefixes @ flipped) ~f:(fun c -> not (agree c)) in
+  print_s [%message (disagreements : int)];
+  [%expect {| (disagreements 0) |}]
+;;
+
+let%expect_test "an error from the fold function stops the fold" =
+  let dir = Filename_unix.temp_dir "ledger" "framing" in
+  let path = dir ^/ "f" in
+  Out_channel.write_all path ~data:(file [ "one"; "two"; "three" ]);
+  let seen = ref [] in
+  let result =
+    Framing.fold_file ~accept:[ digest ] String.bin_reader_t path ~init:() ~f:(fun () v ->
+      seen := v :: !seen;
+      if String.equal v "two" then Or_error.error_string "stop" else Ok ())
+  in
+  let result = Or_error.map result ~f:fst in
+  print_s [%message (result : unit Or_error.t) (seen : string list ref)];
+  [%expect {| ((result (Error stop)) (seen (two one))) |}]
+;;
