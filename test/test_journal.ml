@@ -269,3 +269,65 @@ let%expect_test "one writer at a time" =
     (Ok ())
     |}]
 ;;
+
+let%expect_test "without kept records, records are read back from the file" =
+  with_dir (fun dir ->
+    let path = dir ^/ "j.bin" in
+    let j = Journal.create ~time_source:(clock ()) ~fsync:false path |> ok_exn in
+    populate j;
+    Journal.close j;
+    let kept = Journal.open_ ~fsync:false path |> ok_exn in
+    let from_kept = Journal.records kept in
+    Journal.close kept;
+    let j = Journal.open_ ~fsync:false ~keep_records:false path |> ok_exn in
+    print_s
+      [%message
+        ""
+          ~same:([%equal: Record.t list] (Journal.records j) from_kept : bool)
+          ~records:(List.length from_kept : int)];
+    seq_of
+      (Journal.transfer
+         j
+         ~idempotency_key:(key "dep-2")
+         ~effective_at:(at 2)
+         [ Posting.debit central_bank (eur "1.00"); Posting.credit bob (eur "1.00") ]);
+    print_s [%message "" ~last:((List.last_exn (Journal.records j)).seq : int)];
+    Journal.close j;
+    [%expect {|
+      ((same true) (records 8))
+      (Ok 9)
+      (last 9)
+      |}])
+;;
+
+let%expect_test "opening an account again after reopening from a snapshot" =
+  with_dir (fun dir ->
+    let path = dir ^/ "j.bin" in
+    let j = Journal.create ~time_source:(clock ()) ~fsync:false path |> ok_exn in
+    populate j;
+    let snapshot = Journal.close_day j |> ok_exn in
+    Journal.close j;
+    (* The opening record is covered by the snapshot, so it is not in memory. *)
+    let j = Journal.open_ ~fsync:false ~snapshot path |> ok_exn in
+    show_result (Journal.open_account j (List.hd_exn chart));
+    Journal.close j;
+    [%expect {| (Ok (Duplicate (seq 1))) |}])
+;;
+
+let%expect_test "fold streams the records and returns the balances" =
+  with_dir (fun dir ->
+    let path = dir ^/ "j.bin" in
+    let j = Journal.create ~time_source:(clock ()) ~fsync:false path |> ok_exn in
+    populate j;
+    Journal.close j;
+    let seqs, balances, tail =
+      Journal.fold path ~init:[] ~f:(fun acc r -> r.seq :: acc) |> ok_exn
+    in
+    print_s
+      [%message
+        ""
+          ~seqs:(List.rev seqs : int list)
+          (tail : Framing.Tail.t)
+          ~same_as_replay:(Balances.equal balances (Journal.replay path |> ok_exn) : bool)];
+    [%expect {| ((seqs (1 2 3 4 5 6 7 8)) (tail Clean) (same_as_replay true)) |}])
+;;
