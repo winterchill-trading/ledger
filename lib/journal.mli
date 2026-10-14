@@ -55,6 +55,8 @@ module Append_result : sig
     | Duplicate of { seq : int }
   [@@deriving sexp_of, compare, equal]
 
+  (** The sequence number of the record written, or of the earlier one a duplicate
+      matched. *)
   val seq : t -> int
 end
 
@@ -91,7 +93,10 @@ val open_
 (** Releases the lock and the file. Idempotent; later appends fail. *)
 val close : t -> unit
 
+(** The file the journal was created or opened from. *)
 val path : t -> string
+
+(** The state after the last record written. *)
 val balances : t -> Balances.t
 
 (** Records in sequence order: all of them, or those after the snapshot the journal was
@@ -117,6 +122,7 @@ val business_date : t -> Date.t
 (** Opening the same account again with an identical record is a [Duplicate]. *)
 val open_account : t -> Account.t -> Append_result.t Or_error.t
 
+(** Freezes, reopens or closes an account (see {!Account_status} for what each allows). *)
 val set_status : t -> Account_id.t -> Account_status.t -> Append_result.t Or_error.t
 
 (** {2 Entries} *)
@@ -159,6 +165,8 @@ val hold
   -> unit
   -> Append_result.t Or_error.t
 
+(** {!Hold.release} stamped and booked: returns [amount] (default: all that remains) of
+    the hold to its account. *)
 val release
   :  t
   -> hold_id:Hold_id.t
@@ -171,6 +179,9 @@ val release
   -> unit
   -> Append_result.t Or_error.t
 
+(** {!Hold.capture} stamped and booked: pays [amount] (default: all that remains) of the
+    hold to [to_]; [release_remainder] (default [false]) returns the rest in the same
+    entry. *)
 val capture
   :  t
   -> hold_id:Hold_id.t
@@ -186,6 +197,7 @@ val capture
   -> unit
   -> Append_result.t Or_error.t
 
+(** {!Hold.increment} stamped and booked: adds [amount] to an open hold. *)
 val increment
   :  t
   -> hold_id:Hold_id.t
@@ -213,6 +225,8 @@ val capture_split
   -> unit
   -> Append_result.t Or_error.t
 
+(** {!Hold.over_capture} stamped and booked: pays the whole hold plus [amount] more, taken
+    from the account, to [to_]; [reason] is required and kept in the entry kind. *)
 val over_capture
   :  t
   -> hold_id:Hold_id.t
@@ -310,6 +324,9 @@ val approve_adjustment
   -> checker:string
   -> Append_result.t Or_error.t
 
+(** Closes the proposal under [idempotency_key] without booking it; the key then counts as
+    refused. Works after the proposal expired too; fails if there is no such open
+    proposal. *)
 val reject_adjustment
   :  t
   -> idempotency_key:Idempotency_key.t

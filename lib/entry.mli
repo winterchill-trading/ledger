@@ -122,6 +122,7 @@ val restamp : t -> recorded_at:Time_ns.t -> business_date:Date.t -> t
     adjustment. *)
 val with_code : t -> Code.t -> t Or_error.t
 
+(** The one currency every posting of the entry is in. *)
 val currency : t -> Money.Currency.t
 
 (** Sum of the debit postings, which equals the sum of the credits. *)

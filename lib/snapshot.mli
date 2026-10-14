@@ -26,7 +26,12 @@ type t =
 (** Hex [bin_shape] digest of the snapshot type, in the file header. *)
 val digest : string
 
+(** Writes [t] to [path], creating its directory and replacing any file there. It is
+    written aside and renamed, so a crash never leaves half a snapshot under [path]. *)
 val write : t -> string -> unit Or_error.t
+
+(** Reads a snapshot file; fails on damage or an unknown digest. It is not checked against
+    any journal: see {!verify}. *)
 val read : string -> t Or_error.t
 
 (** [<journal path>.snapshots/<YYYY-MM-DD>.snap] *)

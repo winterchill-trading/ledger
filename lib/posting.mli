@@ -9,7 +9,10 @@ type t =
   }
 [@@deriving sexp, compare, equal]
 
+(** [debit account amount]; [amount] must be positive, which {!Entry.create} checks. *)
 val debit : Account_id.t -> Money.Amount.t -> t
+
+(** [credit account amount], as {!debit}. *)
 val credit : Account_id.t -> Money.Amount.t -> t
 
 (** The same amount on the other side. *)

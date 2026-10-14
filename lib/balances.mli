@@ -23,6 +23,7 @@ open! Core
 
 type t
 
+(** The state of an empty journal: no accounts, no entries. *)
 val empty : t
 
 (** The sequence number the next record must carry (1 for an empty journal). *)
@@ -47,6 +48,7 @@ val accounts : t -> Account.t list
     parent's record with the pending id, its kind, and [allow_negative = false]. *)
 val find_account : t -> Account_id.t -> Account.t option
 
+(** The status of an account; [Open] for one never changed (or never opened). *)
 val status : t -> Account_id.t -> Account_status.t
 
 (** {2 Balances}
@@ -82,6 +84,7 @@ module Columns : sig
   [@@deriving sexp_of, compare, equal]
 end
 
+(** The {!Columns} of one account in one currency; zeros if it has no postings. *)
 val columns : t -> Account_id.t -> Money.Currency.t -> Columns.t
 
 (** Debits minus credits for every account (pending sub-accounts separately) and currency
@@ -169,6 +172,7 @@ end
 (** 24 hours. *)
 val proposal_lifetime : Time_ns.Span.t
 
+(** The proposal made under this key, in any status. *)
 val find_proposal : t -> Idempotency_key.t -> Proposal.t option
 
 (** Proposals still waiting for a decision (expired ones included), sorted by key. *)

@@ -31,6 +31,9 @@ module Recon : sig
   [@@deriving sexp_of, compare, equal]
 end
 
+(** The safeguarding position of one currency on [business_date], against the
+    [external_balance] a bank or provider statement reports for the safeguarding accounts.
+    Fails if [external_balance] is in another currency. *)
 val reconcile
   :  Balances.t
   -> currency:Money.Currency.t

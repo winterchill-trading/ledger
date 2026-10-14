@@ -7,6 +7,7 @@ type t =
   | Credit
 [@@deriving sexp, compare, equal, hash, enumerate, quickcheck]
 
+(** The other side. *)
 val flip : t -> t
 
 module Stable : sig

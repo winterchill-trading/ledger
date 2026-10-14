@@ -28,6 +28,7 @@ type t =
   }
 [@@deriving sexp_of, compare, equal]
 
+(** The debit and credit columns of every account and currency in the state. *)
 val of_balances : Balances.t -> t
 
 (** Debits equal credits in every currency. *)

@@ -107,4 +107,5 @@ val create
   -> created_at:Time_ns.t
   -> t Or_error.t
 
+(** A plain-text rendering for people: balances, then one line per entry. *)
 val to_string_hum : t -> string

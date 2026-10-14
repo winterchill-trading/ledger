@@ -22,6 +22,9 @@
 
 open! Core
 
+(** Builds the entry that reserves [amount] of [account] under [hold_id], expiring at
+    [expires_at] if given. Fails if the account is not open; a reused hold id is refused
+    when the entry is applied. *)
 val place
   :  Balances.t
   -> hold_id:Hold_id.t

@@ -24,6 +24,7 @@ module type S = sig
   end
 end
 
+(** 128 characters. *)
 val max_length : int
 
 (** Why [s] is not a valid id, if it is not. *)
