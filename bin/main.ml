@@ -167,36 +167,47 @@ let camt053 =
 let verify =
   Command.basic
     ~summary:
-      "Check a journal end to end (frames, hash chain, ledger rules) and print its head \
-       hash; with -snapshot, also check the snapshot against it"
+      "Check a journal end to end (frames, hash chain, ledger rules) and print its chain \
+       head; with -snapshot, also check the snapshot against it; with -head, check that \
+       the journal still contains a head published earlier"
     (let%map_open.Command path = journal_flag
      and snapshot =
        flag "-snapshot" (optional Filename_unix.arg_type) ~doc:"FILE end-of-day snapshot"
+     and published =
+       flag
+         "-head"
+         (optional (Arg_type.create (Fn.compose Or_error.ok_exn Chain_head.of_string)))
+         ~doc:"HEAD a chain head printed earlier (ledger-head-v1:...)"
      in
      fun () ->
        let fail e =
          eprint_s [%sexp (e : Error.t)];
          exit 1
        in
-       (match Journal.read path with
-        | Error e -> fail e
-        | Ok (records, tail) ->
-          let decoded =
-            Framing.decode
-              ~accept:Record.compatible_digests
-              Record.Stable.V1.bin_reader_t
-              (In_channel.read_all path)
-            |> Or_error.ok_exn
+       (* Two streaming passes: the ledger rules, then the chain head. *)
+       (match
+          let%bind.Or_error records, _balances, tail =
+            Journal.fold path ~init:0 ~f:(fun n _ -> n + 1)
           in
+          let%map.Or_error head = Chain_head.of_file path in
+          records, tail, head
+        with
+        | Error e -> fail e
+        | Ok (records, tail, head) ->
           print_s
             [%message
               ""
-                ~records:(List.length records : int)
+                (records : int)
                 (tail : Framing.Tail.t)
-                ~head:(Framing.to_hex decoded.head)];
+                ~head:head.sha256
+                ~chain_head:(Chain_head.to_string head)];
           (match tail with
            | Clean -> ()
            | Truncated _ | Corrupt _ -> exit 2));
+       Option.iter published ~f:(fun head ->
+         match Chain_head.verify head ~journal:path with
+         | Error e -> fail e
+         | Ok () -> print_endline "head ok");
        Option.iter snapshot ~f:(fun snapshot ->
          match
            Or_error.bind (Snapshot.read snapshot) ~f:(Snapshot.verify ~journal:path)
