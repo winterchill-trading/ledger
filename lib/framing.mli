@@ -71,8 +71,43 @@ type 'a decoded =
   ; tail : Tail.t
   }
 
-(** Decodes a whole file. Errors (rather than returning records) only when the header is
-    missing, short, or names a digest not in [accept]. *)
+(** What a decoder found besides the records: the fields of {!decoded} other than
+    [records]. *)
+type summary =
+  { digest : string
+  ; valid_length : int
+  ; head : string
+  ; tail : Tail.t
+  }
+
+(** [fold ~accept reader ic ~init ~f] decodes frames from [ic] one at a time, from the
+    start of the channel, and folds [f] over the records, so memory does not grow with the
+    file. It stops at the first damaged or partial frame like {!decode} and reports it in
+    the summary. An [Error] from [f] stops the fold and is returned as is.
+
+    [ic] must be seekable (a file); it is left positioned after the last frame read. *)
+val fold
+  :  ?start:int * string (** as for {!decode} *)
+  -> accept:string list
+  -> 'a Bin_prot.Type_class.reader
+  -> In_channel.t
+  -> init:'acc
+  -> f:('acc -> 'a -> 'acc Or_error.t)
+  -> ('acc * summary) Or_error.t
+
+(** {!fold} over the file at [path]. Errors opening or reading the file are returned, not
+    raised. *)
+val fold_file
+  :  ?start:int * string
+  -> accept:string list
+  -> 'a Bin_prot.Type_class.reader
+  -> string
+  -> init:'acc
+  -> f:('acc -> 'a -> 'acc Or_error.t)
+  -> ('acc * summary) Or_error.t
+
+(** Decodes a whole file already read into memory. Errors (rather than returning records)
+    only when the header is missing, short, or names a digest not in [accept]. *)
 val decode
   :  ?start:int * string
        (** offset of a frame boundary to start at, after a part already decoded, and the

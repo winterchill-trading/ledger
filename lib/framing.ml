@@ -77,14 +77,65 @@ let decode_payload (reader : _ Bin_prot.Type_class.reader) payload =
   | exception exn -> Error (sprintf "payload does not decode: %s" (Exn.to_string exn))
 ;;
 
-let decode ?start ~accept reader contents =
-  let total = String.length contents in
-  if total < header_length || not (String.is_prefix contents ~prefix:magic)
+type summary =
+  { digest : string
+  ; valid_length : int
+  ; head : string
+  ; tail : Tail.t
+  }
+
+(* Where frames come from: a string already in memory or a channel read frame by frame.
+   [read n] returns [n] bytes, or fewer only at the end of the input. *)
+type source =
+  { length : int
+  ; seek : int -> unit
+  ; read : int -> string
+  }
+
+let source_of_string contents =
+  let pos = ref 0 in
+  { length = String.length contents
+  ; seek = (fun p -> pos := p)
+  ; read =
+      (fun n ->
+        let n = Int.min n (String.length contents - !pos) in
+        let s = String.sub contents ~pos:!pos ~len:n in
+        pos := !pos + n;
+        s)
+  }
+;;
+
+let source_of_channel ic =
+  { length = Int64.to_int_exn (In_channel.length ic)
+  ; seek = (fun p -> In_channel.seek ic (Int64.of_int p))
+  ; read =
+      (fun n ->
+        let buf = Bytes.create n in
+        let rec go off =
+          if off = n
+          then off
+          else (
+            match In_channel.input ic ~buf ~pos:off ~len:(n - off) with
+            | 0 -> off
+            | k -> go (off + k))
+        in
+        let got = go 0 in
+        if got = n
+        then Bytes.unsafe_to_string ~no_mutation_while_string_reachable:buf
+        else Bytes.To_string.sub buf ~pos:0 ~len:got)
+  }
+;;
+
+let fold_source ?start ~accept reader source ~init ~f =
+  let total = source.length in
+  source.seek 0;
+  let header = source.read header_length in
+  if String.length header < header_length || not (String.is_prefix header ~prefix:magic)
   then
     Or_error.error_s
       [%message "not a ledger journal (missing or short header)" (total : int)]
   else (
-    let digest = String.sub contents ~pos:(String.length magic) ~len:digest_length in
+    let digest = String.sub header ~pos:(String.length magic) ~len:digest_length in
     if not (List.mem accept digest ~equal:String.equal)
     then
       Or_error.error_s
@@ -94,35 +145,32 @@ let decode ?start ~accept reader contents =
             (accept : string list)]
     else (
       let rec loop offset prev acc =
-        let remaining = total - offset in
         let finish tail =
-          Ok { digest; records = List.rev acc; valid_length = offset; head = prev; tail }
+          Ok (acc, { digest; valid_length = offset; head = prev; tail })
         in
-        if remaining = 0
+        let fixed = source.read frame_overhead in
+        let got = String.length fixed in
+        if got = 0
         then finish Clean
-        else if remaining < frame_overhead
-        then finish (Truncated { offset; bytes = remaining })
+        else if got < frame_overhead
+        then finish (Truncated { offset; bytes = got })
         else (
-          let len = Stdlib.String.get_int64_le contents offset in
-          let check = Stdlib.String.get_int64_le contents (offset + 8) in
+          let len = Stdlib.String.get_int64_le fixed 0 in
+          let check = Stdlib.String.get_int64_le fixed 8 in
           if not (Int64.equal check (Int64.lnot len))
           then finish (Corrupt { offset; reason = "damaged length header" })
           else if Int64.(len < 0L || len > of_int max_payload)
           then finish (Corrupt { offset; reason = sprintf "bad length %Ld" len })
           else (
             let len = Int64.to_int_exn len in
-            if remaining < frame_overhead + len
-            then finish (Truncated { offset; bytes = remaining })
+            (* Never allocate more than the file still holds, whatever the header says. *)
+            let payload = source.read (Int.min len (total - offset - frame_overhead)) in
+            if String.length payload < len
+            then finish (Truncated { offset; bytes = got + String.length payload })
             else (
-              let checksum =
-                String.sub contents ~pos:(offset + size_length) ~len:checksum_length
-              in
-              let payload = String.sub contents ~pos:(offset + frame_overhead) ~len in
+              let checksum = String.sub fixed ~pos:size_length ~len:checksum_length in
               let link =
-                String.sub
-                  contents
-                  ~pos:(offset + size_length + checksum_length)
-                  ~len:link_length
+                String.sub fixed ~pos:(size_length + checksum_length) ~len:link_length
               in
               if not (String.equal checksum (Md5.to_binary (Md5.digest_string payload)))
               then finish (Corrupt { offset; reason = "checksum mismatch" })
@@ -131,12 +179,40 @@ let decode ?start ~accept reader contents =
               else (
                 match decode_payload reader payload with
                 | Error reason -> finish (Corrupt { offset; reason })
-                | Ok v -> loop (offset + frame_overhead + len) (sha256 payload) (v :: acc)))))
+                | Ok v ->
+                  (match f acc v with
+                   | Error _ as e -> e
+                   | Ok acc -> loop (offset + frame_overhead + len) (sha256 payload) acc)))))
       in
       let start, prev = Option.value start ~default:(header_length, genesis) in
       if start < header_length || start > total
       then
         Or_error.error_s
           [%message "start offset outside the file" (start : int) (total : int)]
-      else loop start prev []))
+      else (
+        source.seek start;
+        loop start prev init)))
+;;
+
+let fold ?start ~accept reader ic ~init ~f =
+  fold_source ?start ~accept reader (source_of_channel ic) ~init ~f
+;;
+
+let fold_file ?start ~accept reader path ~init ~f =
+  Or_error.try_with_join (fun () ->
+    In_channel.with_file path ~binary:true ~f:(fun ic ->
+      fold ?start ~accept reader ic ~init ~f))
+;;
+
+let decode ?start ~accept reader contents =
+  let%map.Or_error records_rev, { digest; valid_length; head; tail } =
+    fold_source
+      ?start
+      ~accept
+      reader
+      (source_of_string contents)
+      ~init:[]
+      ~f:(fun acc v -> Ok (v :: acc))
+  in
+  { digest; records = List.rev records_rev; valid_length; head; tail }
 ;;
