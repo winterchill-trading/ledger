@@ -249,6 +249,8 @@ release time; `CHANGES.md` collects the notes under `## Unreleased`. A release i
 `dune-release opam pkg`/`submit`. `money` (and `fixed-decimal`) must be released first.
 Nothing has been released yet.
 
+API docs are built with `dune build @doc` (odoc). CI fails on any odoc warning, so run it before tagging.
+
 ## Known gaps
 
 - `fsync` on macOS does not force the drive cache (`F_FULLFSYNC`); Linux `fsync` does.
