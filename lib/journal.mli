@@ -93,6 +93,12 @@ val balances : t -> Balances.t
     and raises if the file cannot be read back (it was damaged after opening). *)
 val records : t -> Record.t list
 
+(** The hash-chain head after the last record written: publish
+    [Chain_head.to_string (chain_head t)] somewhere outside the system (after each close,
+    say) so that cutting records off the end of the file can be detected with
+    {!Chain_head.verify}. *)
+val chain_head : t -> Chain_head.t
+
 (** The time the next record would be stamped with: the clock, or just after the last
     record if the clock is behind. *)
 val now : t -> Time_ns.t

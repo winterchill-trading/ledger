@@ -30,6 +30,14 @@ type t =
 
 let path t = t.path
 let balances t = t.balances
+
+let chain_head t =
+  { Chain_head.seq = Balances.next_seq t.balances - 1
+  ; journal_length = t.length
+  ; sha256 = Framing.to_hex t.head
+  }
+;;
+
 let utc_date time = Time_ns.to_date time ~zone:Time_float.Zone.utc
 
 let now t =
