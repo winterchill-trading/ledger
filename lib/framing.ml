@@ -126,7 +126,7 @@ let source_of_channel ic =
   }
 ;;
 
-let fold_source ?start ~accept reader source ~init ~f =
+let fold_source ?start ?until ~accept reader source ~init ~f =
   let total = source.length in
   source.seek 0;
   let header = source.read header_length in
@@ -148,7 +148,11 @@ let fold_source ?start ~accept reader source ~init ~f =
         let finish tail =
           Ok (acc, { digest; valid_length = offset; head = prev; tail })
         in
-        let fixed = source.read frame_overhead in
+        let fixed =
+          match until with
+          | Some until when offset >= until -> ""
+          | Some _ | None -> source.read frame_overhead
+        in
         let got = String.length fixed in
         if got = 0
         then finish Clean
@@ -194,14 +198,14 @@ let fold_source ?start ~accept reader source ~init ~f =
         loop start prev init)))
 ;;
 
-let fold ?start ~accept reader ic ~init ~f =
-  fold_source ?start ~accept reader (source_of_channel ic) ~init ~f
+let fold ?start ?until ~accept reader ic ~init ~f =
+  fold_source ?start ?until ~accept reader (source_of_channel ic) ~init ~f
 ;;
 
-let fold_file ?start ~accept reader path ~init ~f =
+let fold_file ?start ?until ~accept reader path ~init ~f =
   Or_error.try_with_join (fun () ->
     In_channel.with_file path ~binary:true ~f:(fun ic ->
-      fold ?start ~accept reader ic ~init ~f))
+      fold ?start ?until ~accept reader ic ~init ~f))
 ;;
 
 let decode ?start ~accept reader contents =

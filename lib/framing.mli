@@ -85,9 +85,13 @@ type summary =
     file. It stops at the first damaged or partial frame like {!decode} and reports it in
     the summary. An [Error] from [f] stops the fold and is returned as is.
 
+    With [until], it stops (reporting a [Clean] tail) at the first frame boundary at or
+    after that offset, so a prefix of a growing file can be read as it was.
+
     [ic] must be seekable (a file); it is left positioned after the last frame read. *)
 val fold
   :  ?start:int * string (** as for {!decode} *)
+  -> ?until:int
   -> accept:string list
   -> 'a Bin_prot.Type_class.reader
   -> In_channel.t
@@ -99,6 +103,7 @@ val fold
     raised. *)
 val fold_file
   :  ?start:int * string
+  -> ?until:int
   -> accept:string list
   -> 'a Bin_prot.Type_class.reader
   -> string
