@@ -15,5 +15,6 @@ jobs:
             money https://github.com/winterchill-trading/money.git
       - run: opam exec -- dune build
       - run: opam exec -- dune test
+      - run: opam exec -- dune exec ./examples/quickstart.exe
   obj-magic:
     uses: winterchill-trading/infra/.github/workflows/obj-magic.yml@main
