@@ -21,6 +21,24 @@ let read_or_exit path =
     records
 ;;
 
+let warn_tail (tail : Framing.Tail.t) =
+  match tail with
+  | Clean -> ()
+  | Truncated _ | Corrupt _ ->
+    eprint_s [%message "warning: journal does not end cleanly" (tail : Framing.Tail.t)]
+;;
+
+(* Streams the file: memory is the ledger state plus what [f] keeps. *)
+let fold_or_exit path ~init ~f =
+  match Journal.fold path ~init ~f with
+  | Error e ->
+    eprint_s [%sexp (e : Error.t)];
+    exit 1
+  | Ok (acc, balances, tail) ->
+    warn_tail tail;
+    acc, balances
+;;
+
 let time_arg =
   Command.Arg_type.create (fun s ->
     match Time_ns.of_string_with_utc_offset s with
@@ -37,19 +55,14 @@ let trial_balance =
     ~summary:"Print the trial balance of a journal; exit 2 if it does not balance"
     (let%map_open.Command path = journal_flag in
      fun () ->
-       let records = read_or_exit path in
-       match Balances.of_records records with
+       let (), balances = fold_or_exit path ~init:() ~f:(fun () _ -> ()) in
+       let tb = Trial_balance.of_balances balances in
+       print_string (Trial_balance.to_string_hum tb);
+       match Trial_balance.check tb with
+       | Ok () -> ()
        | Error e ->
          eprint_s [%sexp (e : Error.t)];
-         exit 1
-       | Ok balances ->
-         let tb = Trial_balance.of_balances balances in
-         print_string (Trial_balance.to_string_hum tb);
-         (match Trial_balance.check tb with
-          | Ok () -> ()
-          | Error e ->
-            eprint_s [%sexp (e : Error.t)];
-            exit 2))
+         exit 2)
 ;;
 
 let statement =
@@ -76,9 +89,32 @@ let statement =
        flag "-after" (optional int) ~doc:"SEQ start after this sequence number (paging)"
      and limit = flag "-limit" (optional int) ~doc:"N at most N entries" in
      fun () ->
-       let records = read_or_exit path in
+       (* Keep only the records a statement of [account] reads: account openings and
+          entries touching it, its pending sub-account or its parent. *)
+       let related =
+         Account_id.(
+           account :: pending account :: Option.to_list (parent_of_pending account))
+       in
+       let relevant (r : Record.t) =
+         match r.event with
+         | Account_opened _ -> true
+         | _ ->
+           List.exists (Record.entries r) ~f:(fun e ->
+             List.exists e.postings ~f:(fun p ->
+               List.mem related p.account ~equal:Account_id.equal))
+       in
+       let records_rev, _ =
+         fold_or_exit path ~init:[] ~f:(fun acc r -> if relevant r then r :: acc else acc)
+       in
        match
-         Statement.create ?from ?until ?after_seq ?limit records ~account ~currency
+         Statement.create
+           ?from
+           ?until
+           ?after_seq
+           ?limit
+           (List.rev records_rev)
+           ~account
+           ~currency
        with
        | Error e ->
          eprint_s [%sexp (e : Error.t)];
